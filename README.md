@@ -60,9 +60,7 @@ export PO_API_KEY='your-api-key'
 po doctor
 ```
 
-API 密钥只从环境变量读取，不会写入配置文件。
-
-下面几个环境变量可以临时覆盖配置：
+API 密钥只从环境变量读取，不会写入配置文件。下面几个环境变量可以临时覆盖配置：
 
 - `PO_CONFIG`
 - `PO_BASE_URL`
@@ -71,7 +69,7 @@ API 密钥只从环境变量读取，不会写入配置文件。
 
 ## 使用
 
-![截屏2026-08-22 17.09.00.png](/var/folders/dj/djr45k5158g6ydg0h_qtfssr0000gn/T/TemporaryItems/NSIRD_screencaptureui_W1ZUgk/截屏2026-08-22%2017.09.00.png)
+![截屏2026-08-22 17.09.00.png](./.assets/p01.png)
 
 启动交互界面：
 
