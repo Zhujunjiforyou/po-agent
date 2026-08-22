@@ -1,0 +1,17 @@
+# macOS and editor metadata
+.DS_Store
+.idea/
+.vscode/
+
+# Local environment files
+.env
+.env.*
+
+# Go build and test output
+/po
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+
