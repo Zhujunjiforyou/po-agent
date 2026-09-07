@@ -7,6 +7,9 @@
 .env
 .env.*
 
+# 本地审阅文档
+/docs/
+
 # Go build and test output
 /po
 /bin/
@@ -14,4 +17,3 @@
 *.test
 *.out
 coverage.*
-
