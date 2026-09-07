@@ -8,7 +8,7 @@ Po Agent是我基于Pi Agent，用Go仿写的一个 Agent 学习项目。
 
 ## 目前包含的功能
 
-- 兼容 OpenAI Chat Completions 接口（我自己目前接入的默认配置是Qwen3.6 27B，因为自己正好有一个apikey）。
+- 兼容 OpenAI Chat Completions 接口，可以配置多个兼容供应商并在交互界面切换模型。
 - 支持流式文本、推理内容和工具调用。
 - 工具参数通过 JSON Schema 校验。
 - 支持串行和并行工具调用。
@@ -49,10 +49,13 @@ export PATH="$(go env GOPATH)/bin:$PATH"
 
 ## 配置
 
-先创建一份全局配置：
+Po 只要求用户提供供应商名称、Base URL、模型 ID 和 API 密钥。供应商名称是本地别名，可以自行命名。
+
+先创建全局配置：
 
 ```sh
 po config init \
+  --provider hub \
   --base-url https://your-endpoint.example/v1 \
   --model your-model-id
 
@@ -60,16 +63,52 @@ export PO_API_KEY='your-api-key'
 po doctor
 ```
 
-API 密钥只从环境变量读取，不会写入配置文件。下面几个环境变量可以临时覆盖配置：
+API 密钥只从环境变量读取，不会写入配置文件。默认变量名是 `PO_API_KEY`。
 
-- `PO_CONFIG`
-- `PO_BASE_URL`
-- `PO_MODEL`
-- `PO_API_KEY`
+### 多供应商
+
+可以继续向同一份配置添加供应商。不同供应商建议使用不同的密钥环境变量：
+
+```sh
+po config add-provider \
+  --name backup \
+  --base-url https://another-endpoint.example/v1 \
+  --api-key-env BACKUP_API_KEY
+
+export BACKUP_API_KEY='your-backup-api-key'
+po doctor --provider backup --model your-model-id
+```
+
+查看配置、查询供应商的模型列表，或直接切换默认模型：
+
+```sh
+po config show
+po config models --provider backup
+po config use --provider backup your-model-id
+```
+
+`po config models` 会请求供应商的 `/models` 接口。某些兼容服务只返回模型 ID，此时缺失的上下文窗口和输出上限会显示为 `-`，运行时使用 Po 的内置默认值。
+
+在交互界面输入 `/models` 会并行读取所有已配置供应商的模型，并按供应商分组展示。选择器支持搜索、方向键、鼠标滚轮和当前模型标记。切换不会丢失当前会话，新版配置也会记住最后的选择；已经在运行的任务需要先结束或中止。
+
+早期的单模型配置仍然可以读取。如果需要添加供应商或持久化模型切换，先执行：
+
+```sh
+po config migrate --provider hub
+```
+
+迁移前的配置会保存为同目录下的 `config.json.legacy.bak`。所有配置子命令可通过 `po config --help` 查看。
+
+启动时还会识别下面几个环境变量：
+
+- `PO_CONFIG`：改变全局配置文件的位置。
+- `PO_BASE_URL`：临时覆盖当前供应商的地址。
+- `PO_MODEL`：临时覆盖启动时使用的模型 ID。
+- `PO_API_KEY`：为使用默认密钥变量名的供应商提供密钥。
 
 ## 使用
 
-![截屏2026-08-22 17.09.00.png](./.assets/p01.png)
+![Po 交互界面中的斜杠命令提示](./.assets/p01.png)
 
 启动交互界面：
 
@@ -99,6 +138,7 @@ po --allow-write --allow-shell
 
 ```text
 /session       查看当前会话
+/models        选择供应商和模型
 /abort         终止当前任务
 /steer X       在下一轮模型调用前加入即时引导
 /queue X       把消息排到当前任务之后
@@ -107,13 +147,23 @@ po --allow-write --allow-shell
 /quit          退出
 ```
 
-任务运行时可以按 `Tab` 切换即时引导和排队模式。使用 `Page Up`、`Page Down`，或者`Shift+Up`、`Shift+Down` 滚动对话记录。
+在输入框中输入 `/` 可查看并过滤交互命令，按 `Tab` 补全当前的第一个匹配项。任务运行时，未显示命令提示时按 `Tab` 切换即时引导和排队模式。方向键 `↑/↓` 切换历史输入；鼠标滚轮、`Page Up` 和 `Page Down` 滚动对话记录。
 
 ## 项目配置
 
 Po 会读取 `AGENTS.md`、`AGENTS.override.md` 和 `CLAUDE.md` 等项目说明文件。
 
-项目中的 `.po/config.json` 可以修改模型地址和运行参数，因此第一次使用时需要先确认是否信任这个目录：
+项目中的 `.po/config.json` 可以选择全局配置中已存在的供应商和模型，也可以覆盖模型地址与运行参数。项目配置不能保存 API 密钥。因此第一次使用时需要先确认是否信任这个目录：
+
+```json
+{
+  "provider": "backup",
+  "model": "your-model-id",
+  "max_output_tokens": 8192
+}
+```
+
+项目配置切换到非当前供应商时，需要同时指定 `model`。
 
 ```sh
 po trust status --workspace .
@@ -144,6 +194,8 @@ JSONL 最后一行只写了一部分时，重新打开会话会丢弃这段不�
 - 根目录：Agent 循环、消息、模型和工具接口。
 - `cmd/po`：命令行和交互终端。
 - `provider/openai`：兼容 OpenAI 接口的模型实现。
+- `internal/appconfig`：全局与项目配置的读取、验证和迁移。
+- `internal/modelcatalog`：通过供应商的 `/models` 接口发现模型。
 - `tool/coding`：读写文件、搜索、Git、Go 和 Shell 工具。
 - `workspace`：工作区文件访问限制。
 - `session/jsonl`：会话记录与恢复。
