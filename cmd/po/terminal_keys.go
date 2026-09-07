@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"io"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -23,6 +25,8 @@ const (
 	terminalKeyToggleMode
 	terminalKeyPageUp
 	terminalKeyPageDown
+	terminalKeyScrollUp
+	terminalKeyScrollDown
 	terminalKeyClear
 	terminalKeyBackspace
 	terminalKeyDelete
@@ -32,6 +36,7 @@ const (
 	terminalKeyInterrupt
 	terminalKeyEOF
 	terminalKeyReadError
+	terminalKeyIgnored
 )
 
 type terminalKey struct {
@@ -108,6 +113,12 @@ func readEscapeKey(reader *bufio.Reader) (terminalKey, error) {
 		}
 	}
 	value := sequence.String()
+	if value == "M" {
+		return readX10Mouse(reader)
+	}
+	if key, ok := parseSGRMouse(value); ok {
+		return key, nil
+	}
 	switch value {
 	case "A":
 		return terminalKey{kind: terminalKeyUp}, nil
@@ -140,6 +151,43 @@ func readEscapeKey(reader *bufio.Reader) (terminalKey, error) {
 		return terminalKey{kind: terminalKeyPaste, text: pasted}, err
 	default:
 		return terminalKey{kind: terminalKeyRunes}, nil
+	}
+}
+
+func parseSGRMouse(sequence string) (terminalKey, bool) {
+	if !strings.HasPrefix(sequence, "<") ||
+		(!strings.HasSuffix(sequence, "M") && !strings.HasSuffix(sequence, "m")) {
+		return terminalKey{}, false
+	}
+	fields := strings.Split(sequence[1:len(sequence)-1], ";")
+	if len(fields) != 3 {
+		return terminalKey{kind: terminalKeyIgnored}, true
+	}
+	button, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return terminalKey{kind: terminalKeyIgnored}, true
+	}
+	return mouseButtonKey(button), true
+}
+
+func readX10Mouse(reader *bufio.Reader) (terminalKey, error) {
+	data := make([]byte, 3)
+	if _, err := io.ReadFull(reader, data); err != nil {
+		return terminalKey{}, err
+	}
+	return mouseButtonKey(int(data[0]) - 32), nil
+}
+
+func mouseButtonKey(button int) terminalKey {
+	// Shift、Alt 和 Ctrl 会占用按钮编码中间的修饰位，不应改变滚轮方向。
+	button &^= 4 | 8 | 16
+	switch button {
+	case 64:
+		return terminalKey{kind: terminalKeyScrollUp}
+	case 65:
+		return terminalKey{kind: terminalKeyScrollDown}
+	default:
+		return terminalKey{kind: terminalKeyIgnored}
 	}
 }
 

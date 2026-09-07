@@ -5,71 +5,19 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"strings"
+	"os"
 
 	po "github.com/lemonzjj/po-agent-go"
+	"github.com/lemonzjj/po-agent-go/internal/appconfig"
 	"github.com/lemonzjj/po-agent-go/tool/builtin"
 )
-
-func runConfig(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: po config init|path")
-		return 2
-	}
-	switch args[0] {
-	case "path":
-		path, err := defaultConfigPath()
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		fmt.Fprintln(stdout, path)
-		return 0
-	case "init":
-		flags := flag.NewFlagSet("po config init", flag.ContinueOnError)
-		flags.SetOutput(stderr)
-		profile := flags.String("profile", "qwen3.6-27b", "configuration profile")
-		baseURL := flags.String("base-url", "", "OpenAI-compatible API base URL")
-		model := flags.String("model", "", "model identifier")
-		path := flags.String("config", "", "output config path")
-		force := flags.Bool("force", false, "overwrite existing config")
-		if err := flags.Parse(args[1:]); err != nil {
-			return 2
-		}
-		if flags.NArg() != 0 {
-			fmt.Fprintf(stderr, "unexpected argument: %s\n", flags.Arg(0))
-			return 2
-		}
-		if *profile != "qwen3.6-27b" {
-			fmt.Fprintf(stderr, "unsupported profile %q\n", *profile)
-			return 2
-		}
-		if strings.TrimSpace(*baseURL) == "" || strings.TrimSpace(*model) == "" {
-			fmt.Fprintln(stderr, "--base-url and --model are required")
-			return 2
-		}
-		output, err := chooseConfigPath(*path)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if err := writeConfig(output, qwen36_27BConfig(*baseURL, *model), *force); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		fmt.Fprintf(stdout, "wrote %s\n", output)
-		fmt.Fprintf(stdout, "set %s in your environment before running Po\n", defaultAPIKeyEnv)
-		return 0
-	default:
-		fmt.Fprintf(stderr, "unknown config command: %s\n", args[0])
-		return 2
-	}
-}
 
 func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("po doctor", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	pathFlag := flags.String("config", "", "path to config.json")
+	modelFlag := flags.String("model", "", "temporarily override the configured model")
+	providerFlag := flags.String("provider", "", "configured provider for the model")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -83,12 +31,17 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	config, err := loadAppConfig(path)
+	document, err := appconfig.Load(path)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	apiKey, err := resolveAPIKey(config)
+	config, err := document.Resolve(appconfig.Selection{Provider: *providerFlag, Model: *modelFlag})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	apiKey, err := appconfig.ResolveAPIKey(config, os.Getenv)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -101,6 +54,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 
 	fmt.Fprintf(stdout, "config: %s\n", path)
 	fmt.Fprintf(stdout, "endpoint: %s\n", config.BaseURL)
+	fmt.Fprintf(stdout, "provider: %s\n", config.Provider)
 	fmt.Fprintf(stdout, "model: %s\n", config.Model)
 
 	user, _ := po.NewUserTextMessage("doctor-user", "Reply with exactly PO_OK and nothing else.")

@@ -105,6 +105,66 @@ func TestTerminalUIHistoryRestoresDraft(t *testing.T) {
 	}
 }
 
+func TestTerminalUISuggestsAndCompletesSlashCommands(t *testing.T) {
+	ui := newTerminalUI(72, 18)
+	ui.handleKey(terminalKey{kind: terminalKeyRunes, text: "/"})
+	view, cursorRow, _ := ui.view()
+	rendered := strings.Join(view, "\n")
+	for _, fragment := range []string{"Commands", "/session", "/models", "/queue MESSAGE", "Tab complete"} {
+		if !strings.Contains(rendered, fragment) {
+			t.Fatalf("slash suggestions missing %q: %q", fragment, rendered)
+		}
+	}
+	if cursorRow != 16 {
+		t.Fatalf("cursor row = %d, want fixed input row 16", cursorRow)
+	}
+
+	ui.handleKey(terminalKey{kind: terminalKeyRunes, text: "mo"})
+	filtered, _, _ := ui.view()
+	filteredText := strings.Join(filtered, "\n")
+	if !strings.Contains(filteredText, "/models") || strings.Contains(filteredText, "/session") {
+		t.Fatalf("filtered slash suggestions = %q", filteredText)
+	}
+	ui.handleKey(terminalKey{kind: terminalKeyToggleMode})
+	if got := ui.editor.Value(); got != "/models" {
+		t.Fatalf("completed command = %q, want /models", got)
+	}
+}
+
+func TestREPLCommandCatalogDrivesHelpAndExactMatches(t *testing.T) {
+	help := replHelp()
+	seen := make(map[string]struct{}, len(replCommands))
+	for _, command := range replCommands {
+		if _, duplicate := seen[command.name]; duplicate {
+			t.Fatalf("duplicate public command %q", command.name)
+		}
+		seen[command.name] = struct{}{}
+		if !strings.Contains(help, command.usage) || !strings.Contains(help, command.description) {
+			t.Fatalf("help does not contain command %#v: %q", command, help)
+		}
+		matches := matchingREPLCommands(command.name)
+		if len(matches) != 1 || matches[0].name != command.name {
+			t.Fatalf("exact matches for %q = %#v", command.name, matches)
+		}
+	}
+}
+
+func TestTerminalUISlashSuggestionsDoNotTakeHistoryArrows(t *testing.T) {
+	ui := newTerminalUI(64, 16)
+	ui.editor.SetValue("earlier input")
+	ui.handleKey(terminalKey{kind: terminalKeyEnter})
+	ui.editor.SetValue("/")
+
+	ui.handleKey(terminalKey{kind: terminalKeyUp})
+	if got := ui.editor.Value(); got != "earlier input" {
+		t.Fatalf("up arrow selected %q, want input history", got)
+	}
+	ui.handleKey(terminalKey{kind: terminalKeyDown})
+	if got := ui.editor.Value(); got != "/" {
+		t.Fatalf("down arrow restored %q, want slash draft", got)
+	}
+}
+
 func TestTerminalUISubmitsRunningInputInSelectedMode(t *testing.T) {
 	ui := newTerminalUI(64, 16)
 	ui.setState(consoleState{Running: true, Activity: "turn 1 · responding"})
@@ -192,6 +252,26 @@ func TestTerminalUIPageNavigationMovesThroughTranscript(t *testing.T) {
 	}
 }
 
+func TestTerminalUIWheelScrollsTranscriptWithoutChangingInput(t *testing.T) {
+	ui := newTerminalUI(40, 12)
+	for index := range 12 {
+		ui.presentInput(consoleInputConversation, fmt.Sprintf("message %d", index))
+	}
+	ui.editor.SetValue("draft")
+
+	ui.handleKey(terminalKey{kind: terminalKeyScrollUp})
+	if ui.scroll == 0 {
+		t.Fatal("wheel up did not scroll the transcript")
+	}
+	if got := ui.editor.Value(); got != "draft" {
+		t.Fatalf("wheel changed input to %q", got)
+	}
+	ui.handleKey(terminalKey{kind: terminalKeyScrollDown})
+	if ui.scroll != 0 {
+		t.Fatalf("wheel down left scroll at %d, want bottom", ui.scroll)
+	}
+}
+
 func TestTerminalTranscriptKeepsOneGapBetweenEntries(t *testing.T) {
 	ui := newTerminalUI(48, 14)
 	ui.appendStream(terminalStreamText, "first\n")
@@ -235,6 +315,47 @@ func TestReadTerminalKeySupportsAlternatePageNavigation(t *testing.T) {
 	}
 }
 
+func TestReadTerminalKeyDecodesMouseWheelProtocols(t *testing.T) {
+	sgr := bufio.NewReader(strings.NewReader("\x1b[<64;20;8M\x1b[<69;20;8M"))
+	for index, expected := range []terminalKeyKind{terminalKeyScrollUp, terminalKeyScrollDown} {
+		key, err := readTerminalKey(sgr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key.kind != expected {
+			t.Fatalf("SGR wheel key %d = %v, want %v", index, key.kind, expected)
+		}
+	}
+
+	x10Bytes := []byte("\x1b[M")
+	x10Bytes = append(x10Bytes, byte(64+32), byte(10+32), byte(5+32))
+	x10Bytes = append(x10Bytes, []byte("\x1b[M")...)
+	x10Bytes = append(x10Bytes, byte(65+32), byte(10+32), byte(5+32))
+	x10 := bufio.NewReader(bytes.NewReader(x10Bytes))
+	for index, expected := range []terminalKeyKind{terminalKeyScrollUp, terminalKeyScrollDown} {
+		key, err := readTerminalKey(x10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key.kind != expected {
+			t.Fatalf("X10 wheel key %d = %v, want %v", index, key.kind, expected)
+		}
+	}
+}
+
+func TestTerminalScreenModeEnablesAndRestoresMouseTracking(t *testing.T) {
+	for _, sequence := range []string{"\x1b[?1000h", "\x1b[?1006h"} {
+		if !strings.Contains(terminalEnterScreen, sequence) {
+			t.Fatalf("terminal enter sequence missing %q", sequence)
+		}
+	}
+	for _, sequence := range []string{"\x1b[?1006l", "\x1b[?1000l"} {
+		if !strings.Contains(terminalLeaveScreen, sequence) {
+			t.Fatalf("terminal leave sequence missing %q", sequence)
+		}
+	}
+}
+
 func TestWrapDisplayNeverExceedsTerminalWidth(t *testing.T) {
 	for _, line := range wrapDisplay("中文和 English words should wrap cleanly", 10) {
 		if width := runewidth.StringWidth(line); width > 10 {
@@ -246,5 +367,103 @@ func TestWrapDisplayNeverExceedsTerminalWidth(t *testing.T) {
 func TestTerminalOutputRemovesControlCharacters(t *testing.T) {
 	if got, want := sanitizeTerminalText("safe\x1b[2J\x00text"), "safe[2Jtext"; got != want {
 		t.Fatalf("sanitized = %q, want %q", got, want)
+	}
+}
+
+func TestTerminalSelectorGroupsFiltersAndSelects(t *testing.T) {
+	ui := newTerminalUI(64, 16)
+	ui.openSelector("Select model", []consoleChoice{
+		{ID: "kimi", Group: "hub", Label: "aliyun/kimi-k3", Current: true},
+		{ID: "deepseek", Group: "hub", Label: "aliyun/deepseek-v4-pro"},
+		{ID: "local", Group: "local", Label: "local-model"},
+	})
+
+	view, cursorRow, _ := ui.view()
+	rendered := strings.Join(view, "\n")
+	for _, fragment := range []string{
+		"Select model", "hub", "local", "aliyun/kimi-k3", "local-model", "current", "wheel",
+	} {
+		if !strings.Contains(rendered, fragment) {
+			t.Fatalf("selector missing %q: %q", fragment, rendered)
+		}
+	}
+	if cursorRow != 2 {
+		t.Fatalf("selector cursor row = %d, want 2", cursorRow)
+	}
+
+	ui.handleKey(terminalKey{kind: terminalKeyRunes, text: "deepseek"})
+	filtered, _, _ := ui.view()
+	filteredText := strings.Join(filtered, "\n")
+	if !strings.Contains(filteredText, "aliyun/deepseek-v4-pro") || strings.Contains(filteredText, "kimi-k3") {
+		t.Fatalf("filtered selector = %q", filteredText)
+	}
+	selected := ui.handleKey(terminalKey{kind: terminalKeyEnter})
+	if !selected.selectionDone || selected.selectionID != "deepseek" {
+		t.Fatalf("selection = %#v", selected)
+	}
+}
+
+func TestTerminalSelectorUsesWheelButIgnoresPageKeys(t *testing.T) {
+	ui := newTerminalUI(64, 16)
+	ui.openSelector("Select model", []consoleChoice{
+		{ID: "a", Group: "hub", Label: "model-a"},
+		{ID: "b", Group: "hub", Label: "model-b"},
+		{ID: "c", Group: "hub", Label: "model-c"},
+		{ID: "d", Group: "hub", Label: "model-d"},
+	})
+
+	ui.handleKey(terminalKey{kind: terminalKeyPageDown})
+	unchanged := ui.handleKey(terminalKey{kind: terminalKeyEnter})
+	if unchanged.selectionID != "a" {
+		t.Fatalf("Page Down changed selection to %q", unchanged.selectionID)
+	}
+
+	ui.handleKey(terminalKey{kind: terminalKeyScrollDown})
+	scrolled := ui.handleKey(terminalKey{kind: terminalKeyEnter})
+	if scrolled.selectionID != "d" {
+		t.Fatalf("wheel selected %q, want d", scrolled.selectionID)
+	}
+}
+
+func TestPlainConsoleSelectorUsesNumberedFallback(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	console := newPlainConsole(strings.NewReader("2\n"), &stdout, &stderr)
+	id, selected, err := console.SelectChoice("Select model", []consoleChoice{
+		{ID: "a:model-a", Group: "a", Label: "model-a"},
+		{ID: "b:model-b", Group: "b", Label: "model-b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !selected || id != "b:model-b" {
+		t.Fatalf("selection = %q, selected=%t", id, selected)
+	}
+	if output := stderr.String(); !strings.Contains(output, "[a]") || !strings.Contains(output, "[b]") {
+		t.Fatalf("plain selector output = %q", output)
+	}
+}
+
+func TestConsoleSelectorRejectsDuplicateIDs(t *testing.T) {
+	err := validateConsoleChoices("Choose", []consoleChoice{
+		{ID: "same", Label: "first"},
+		{ID: "same", Label: "second"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("error = %v, want duplicate ID rejection", err)
+	}
+}
+
+func TestREPLExposesOnlyModelsCommand(t *testing.T) {
+	if !isModelCommand("/models") || !isModelCommand("/models unexpected") {
+		t.Fatal("/models was not recognized as the model command")
+	}
+	for _, command := range []string{"/model", "/model anything"} {
+		if isModelCommand(command) {
+			t.Fatalf("removed alias %q is still recognized", command)
+		}
+	}
+	if _, _, err := chooseREPLModel(nil, "/models direct-model", nil, nil); err == nil {
+		t.Fatal("/models unexpectedly accepted a direct model argument")
 	}
 }

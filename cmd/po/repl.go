@@ -16,28 +16,10 @@ type runDone struct {
 	err error
 }
 
-const replWelcome = `Po interactive session %s
-
-/session  show session
-/abort    abort active run
-/queue X  queue follow-up while running
-/clear    clear visible transcript
-/help     show commands
-/quit     exit`
-
-const replWelcomeHelp = `/session       show session details
-/abort         stop the active run
-/steer X       steer at the next safe turn boundary
-/queue X       queue a follow-up for the natural stopping point
-/follow X      alias for /queue
-/clear         clear the visible transcript; session data is retained
-/quit          exit when no run is active
-
-While running, Enter uses the mode shown in the input box; Tab switches between Steer and Queue.`
-
 func runREPL(
 	ctx context.Context,
-	agent *po.Agent,
+	runtime *appRuntime,
+	models *replModelManager,
 	opened *openedSession,
 	approver *interactiveApprover,
 	console replConsole,
@@ -50,10 +32,12 @@ func runREPL(
 
 	prompt := newPromptController(console)
 	activity := newActivityReporter(prompt, console)
+	agent := runtime.Agent
 	unsubscribe := agent.Subscribe(activity.Observe)
-	defer unsubscribe()
+	defer func() { unsubscribe() }()
 
-	_ = console.Print(fmt.Sprintf(replWelcome, opened.Session.ID()))
+	_ = console.Print(replWelcome(opened.Session.ID()))
+	prompt.SetModel(replModelLabel(models.Current()))
 	prompt.SetRuntime("", false)
 	prompt.Show()
 
@@ -151,7 +135,7 @@ func runREPL(
 
 			switch text {
 			case "/help":
-				_ = console.Print(replWelcomeHelp)
+				_ = console.Print(replHelp())
 				prompt.Show()
 				inputs = readConsoleInput(console)
 				continue
@@ -173,6 +157,19 @@ func runREPL(
 			}
 
 			if active != nil {
+				if isModelCommand(text) {
+					_ = console.Print("run active; switch models after the current run or abort it first")
+					prompt.Show()
+					inputs = readConsoleInput(console)
+					continue
+				}
+				if strings.HasPrefix(text, "/") && !isRunControlCommand(text) &&
+					text != "/abort" && text != "/quit" && text != "/exit" {
+					printUnknownCommand(console, text)
+					prompt.Show()
+					inputs = readConsoleInput(console)
+					continue
+				}
 				handleActiveInput(active, inputIDs, text, input.mode, console)
 				prompt.Show()
 				inputs = readConsoleInput(console)
@@ -188,8 +185,36 @@ func runREPL(
 				inputs = readConsoleInput(console)
 				continue
 			}
+			if isModelCommand(text) {
+				prompt.SetRuntime("loading models", false)
+				prompt.Show()
+				choice, selected, err := chooseREPLModel(ctx, text, models, console)
+				prompt.SetRuntime("", false)
+				if err != nil {
+					_ = console.Print(fmt.Sprintf("[models] %v", err))
+				} else if selected {
+					if err := models.Switch(choice); err != nil {
+						_ = console.Print(fmt.Sprintf("[models] switch failed: %v", err))
+					} else {
+						unsubscribe()
+						agent = runtime.Agent
+						unsubscribe = agent.Subscribe(activity.Observe)
+						prompt.SetModel(replModelLabel(models.Current()))
+						_ = console.Print(fmt.Sprintf("model: %s / %s", choice.Provider, choice.Model))
+					}
+				}
+				prompt.Show()
+				inputs = readConsoleInput(console)
+				continue
+			}
 			if isRunControlCommand(text) {
 				_ = console.Print("no active run; send the message normally to start one")
+				prompt.Show()
+				inputs = readConsoleInput(console)
+				continue
+			}
+			if strings.HasPrefix(text, "/") {
+				printUnknownCommand(console, text)
 				prompt.Show()
 				inputs = readConsoleInput(console)
 				continue
@@ -224,6 +249,11 @@ func runREPL(
 func isRunControlCommand(text string) bool {
 	command, _, _ := strings.Cut(text, " ")
 	return command == "/steer" || command == "/queue" || command == "/follow"
+}
+
+func printUnknownCommand(console replConsole, text string) {
+	command, _, _ := strings.Cut(text, " ")
+	_ = console.Print(fmt.Sprintf("unknown command %q; use /help", command))
 }
 
 func readConsoleInput(console replConsole) <-chan consoleInput {

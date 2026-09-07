@@ -7,6 +7,7 @@ import (
 
 	po "github.com/lemonzjj/po-agent-go"
 	"github.com/lemonzjj/po-agent-go/codingprompt"
+	"github.com/lemonzjj/po-agent-go/internal/appconfig"
 	"github.com/lemonzjj/po-agent-go/policy"
 	"github.com/lemonzjj/po-agent-go/project"
 	"github.com/lemonzjj/po-agent-go/schema/basic"
@@ -29,9 +30,15 @@ type runtimeOptions struct {
 type appRuntime struct {
 	Agent     *po.Agent
 	Workspace *workspace.Workspace
+
+	tools          *po.ToolRegistry
+	systemPrompt   string
+	beforeToolCall po.BeforeToolCallHook
+	afterToolCall  po.AfterToolCallHook
+	emitDelta      po.DeltaEmitter
 }
 
-func buildAppRuntime(config appConfig, apiKey string, opts runtimeOptions) (*appRuntime, error) {
+func buildAppRuntime(config appconfig.Runtime, apiKey string, opts runtimeOptions) (*appRuntime, error) {
 	ws, err := workspace.Open(opts.Workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open workspace: %w", err)
@@ -41,31 +48,24 @@ func buildAppRuntime(config appConfig, apiKey string, opts runtimeOptions) (*app
 		return fail(fmt.Errorf("model output is required"))
 	}
 
-	model, err := buildModel(config, apiKey)
-	if err != nil {
-		return fail(err)
-	}
-
 	registry := po.NewToolRegistry()
-	if config.Tools {
-		toolkit := coding.NewToolkit(ws)
-		tools := toolkit.ReadOnlyTools()
-		if opts.AllowWrite {
-			tools, err = toolkit.CodingTools()
-			if err != nil {
-				return fail(err)
-			}
+	toolkit := coding.NewToolkit(ws)
+	tools := toolkit.ReadOnlyTools()
+	if opts.AllowWrite {
+		tools, err = toolkit.CodingTools()
+		if err != nil {
+			return fail(err)
 		}
-		processTools := coding.NewProcessToolkit(ws.Name(), procrun.NewRunner())
-		tools = append(tools, processTools.DevelopmentTools()...)
-		if opts.AllowShell {
-			tools = append(tools, processTools.ShellTool())
-		}
-		tools = append(tools, builtin.NewCalculator())
-		for _, tool := range tools {
-			if err := registry.Register(tool); err != nil {
-				return fail(fmt.Errorf("register tool: %w", err))
-			}
+	}
+	processTools := coding.NewProcessToolkit(ws.Name(), procrun.NewRunner())
+	tools = append(tools, processTools.DevelopmentTools()...)
+	if opts.AllowShell {
+		tools = append(tools, processTools.ShellTool())
+	}
+	tools = append(tools, builtin.NewCalculator())
+	for _, tool := range tools {
+		if err := registry.Register(tool); err != nil {
+			return fail(fmt.Errorf("register tool: %w", err))
 		}
 	}
 
@@ -89,15 +89,13 @@ func buildAppRuntime(config appConfig, apiKey string, opts runtimeOptions) (*app
 		return fail(err)
 	}
 
-	agent, err := po.NewAgent(po.AgentConfig{
-		Model:           model,
-		Tools:           registry,
-		Validator:       basic.New(),
-		SystemPrompt:    prompt,
-		MaxOutputTokens: config.MaxOutputTokens,
-		BeforeToolCall:  pipeline.BeforeToolCall,
-		AfterToolCall:   pipeline.AfterToolCall,
-		EmitModelDelta: func(ctx context.Context, delta po.ModelDelta) error {
+	runtime := &appRuntime{
+		Workspace:      ws,
+		tools:          registry,
+		systemPrompt:   prompt,
+		beforeToolCall: pipeline.BeforeToolCall,
+		afterToolCall:  pipeline.AfterToolCall,
+		emitDelta: func(ctx context.Context, delta po.ModelDelta) error {
 			switch delta.Kind {
 			case po.ModelDeltaText:
 				return opts.Output.WriteModelText(delta.Text)
@@ -108,11 +106,51 @@ func buildAppRuntime(config appConfig, apiKey string, opts runtimeOptions) (*app
 			}
 			return nil
 		},
-	})
-	if err != nil {
+	}
+	if err := runtime.SwitchModel(config, apiKey); err != nil {
 		return fail(err)
 	}
-	return &appRuntime{Agent: agent, Workspace: ws}, nil
+	return runtime, nil
+}
+
+// SwitchModel 重建只持有模型状态的 Agent。工作区、工具注册表和审批管线都保持
+// 不变，因此交互会话可以在不丢失 Transcript 的情况下切换模型。调用方必须
+// 保证当前没有正在执行的 Run。
+func (r *appRuntime) SwitchModel(config appconfig.Runtime, apiKey string) error {
+	agent, err := r.prepareAgent(config, apiKey)
+	if err != nil {
+		return err
+	}
+	r.Agent = agent
+	return nil
+}
+
+func (r *appRuntime) prepareAgent(config appconfig.Runtime, apiKey string) (*po.Agent, error) {
+	if r == nil {
+		return nil, fmt.Errorf("runtime is nil")
+	}
+	model, err := buildModel(config, apiKey)
+	if err != nil {
+		return nil, err
+	}
+	tools := r.tools
+	if !config.Tools {
+		tools = po.NewToolRegistry()
+	}
+	agent, err := po.NewAgent(po.AgentConfig{
+		Model:           model,
+		Tools:           tools,
+		Validator:       basic.New(),
+		SystemPrompt:    r.systemPrompt,
+		MaxOutputTokens: config.MaxOutputTokens,
+		BeforeToolCall:  r.beforeToolCall,
+		AfterToolCall:   r.afterToolCall,
+		EmitModelDelta:  r.emitDelta,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return agent, nil
 }
 
 func riskyToolReasons() map[string]string {

@@ -8,6 +8,8 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
+const terminalWheelScrollLines = 3
+
 type terminalEntryKind uint8
 
 const (
@@ -47,6 +49,7 @@ type terminalUI struct {
 	controlInputs []terminalControlInput
 	scroll        int
 	unseenOutput  bool
+	selector      *terminalSelector
 
 	transcriptDirty bool
 	cachedWidth     int
@@ -165,13 +168,18 @@ func (ui *terminalUI) markOutput(previousLineCount int) {
 }
 
 type terminalInputAction struct {
-	submit bool
-	line   string
-	mode   consoleInputMode
-	err    error
+	submit        bool
+	line          string
+	mode          consoleInputMode
+	err           error
+	selectionID   string
+	selectionDone bool
 }
 
 func (ui *terminalUI) handleKey(key terminalKey) terminalInputAction {
+	if ui.selector != nil {
+		return ui.selector.handleKey(key)
+	}
 	switch key.kind {
 	case terminalKeyRunes, terminalKeyPaste:
 		ui.editor.Insert(key.text)
@@ -205,11 +213,17 @@ func (ui *terminalUI) handleKey(key terminalKey) terminalInputAction {
 	case terminalKeyDown:
 		ui.nextHistory()
 	case terminalKeyToggleMode:
-		ui.toggleInputMode()
+		if !ui.completeSlashCommand() {
+			ui.toggleInputMode()
+		}
 	case terminalKeyPageUp:
 		ui.pageUp()
 	case terminalKeyPageDown:
 		ui.pageDown()
+	case terminalKeyScrollUp:
+		ui.scrollUp(terminalWheelScrollLines)
+	case terminalKeyScrollDown:
+		ui.scrollDown(terminalWheelScrollLines)
 	case terminalKeyClear:
 		ui.clearTranscript()
 	case terminalKeyEnter:
@@ -249,12 +263,20 @@ func (ui *terminalUI) toggleInputMode() {
 }
 
 func (ui *terminalUI) pageUp() {
-	ui.scroll += max(ui.viewportHeight()-1, 1)
-	ui.clampScroll()
+	ui.scrollUp(max(ui.viewportHeight()-1, 1))
 }
 
 func (ui *terminalUI) pageDown() {
-	ui.scroll = max(0, ui.scroll-max(ui.viewportHeight()-1, 1))
+	ui.scrollDown(max(ui.viewportHeight()-1, 1))
+}
+
+func (ui *terminalUI) scrollUp(lines int) {
+	ui.scroll += max(lines, 0)
+	ui.clampScroll()
+}
+
+func (ui *terminalUI) scrollDown(lines int) {
+	ui.scroll = max(0, ui.scroll-max(lines, 0))
 	if ui.scroll == 0 {
 		ui.unseenOutput = false
 	}
@@ -291,7 +313,9 @@ func (ui *terminalUI) resetHistoryNavigation() {
 	ui.historyDraft = ""
 }
 
-func (ui *terminalUI) viewportHeight() int { return max(ui.height-terminalFooterHeight, 1) }
+func (ui *terminalUI) viewportHeight() int {
+	return max(ui.height-terminalFooterHeight-len(ui.slashCommandLines()), 1)
+}
 
 func (ui *terminalUI) clampScroll() {
 	lines := ui.transcriptLines()
@@ -300,6 +324,10 @@ func (ui *terminalUI) clampScroll() {
 }
 
 func (ui *terminalUI) view() ([]string, int, int) {
+	if ui.selector != nil {
+		return ui.selector.view(ui.width, ui.height)
+	}
+	slashCommands := ui.slashCommandLines()
 	viewportHeight := ui.viewportHeight()
 	transcript := ui.transcriptLines()
 	maximumScroll := max(0, len(transcript)-viewportHeight)
@@ -315,9 +343,60 @@ func (ui *terminalUI) view() ([]string, int, int) {
 	status := ui.statusLine()
 	inputTop, inputLine, inputBottom, cursorColumn := ui.inputBox()
 	help := terminalDim(truncateDisplay(ui.helpText(), ui.width))
-	view := append(visible, contextLine, status, inputTop, inputLine, inputBottom, help)
-	return view, viewportHeight + 4, cursorColumn
+	view := append(visible, slashCommands...)
+	view = append(view, contextLine, status, inputTop, inputLine, inputBottom, help)
+	return view, viewportHeight + len(slashCommands) + 4, cursorColumn
 }
+
+func (ui *terminalUI) completeSlashCommand() bool {
+	if ui.state.Approval != "" {
+		return false
+	}
+	matches := matchingREPLCommands(ui.editor.Value())
+	if len(matches) == 0 {
+		return false
+	}
+	ui.editor.SetValue(matches[0].name)
+	if strings.Contains(matches[0].usage, " ") {
+		ui.editor.Insert(" ")
+	}
+	ui.resetHistoryNavigation()
+	return true
+}
+
+func (ui *terminalUI) slashCommandLines() []string {
+	if ui.state.Approval != "" {
+		return nil
+	}
+	matches := matchingREPLCommands(ui.editor.Value())
+	// 至少保留一行对话区，窄终端中再通过继续输入缩小匹配范围。
+	available := ui.height - terminalFooterHeight - 1
+	if len(matches) == 0 || available < 2 {
+		return nil
+	}
+	visible := min(len(matches), available-1)
+	header := fmt.Sprintf("Commands · %d matches · type to filter · Tab complete", len(matches))
+	lines := []string{terminalDim(truncateDisplay(header, ui.width))}
+	usageWidth := 0
+	for _, command := range matches[:visible] {
+		usageWidth = max(usageWidth, len(command.usage))
+	}
+	for index, command := range matches[:visible] {
+		marker := "  "
+		if index == 0 {
+			marker = terminalCyan("› ")
+		}
+		body := fmt.Sprintf("%-*s  %s", usageWidth, command.usage, command.description)
+		lines = append(lines, marker+truncateDisplay(body, max(ui.width-2, 1)))
+	}
+	return lines
+}
+
+func (ui *terminalUI) openSelector(title string, choices []consoleChoice) {
+	ui.selector = newTerminalSelector(title, choices)
+}
+
+func (ui *terminalUI) closeSelector() { ui.selector = nil }
 
 func (ui *terminalUI) transcriptLines() []string {
 	if !ui.transcriptDirty && ui.cachedWidth == ui.width {
@@ -394,6 +473,9 @@ func (ui *terminalUI) statusLine() string {
 	default:
 		dot = terminalGreen("●")
 		detail = "Ready"
+		if ui.state.Model != "" {
+			detail += " · " + ui.state.Model
+		}
 	}
 	if ui.unseenOutput {
 		detail += "  ↓ new output"
@@ -440,11 +522,13 @@ func (ui *terminalUI) helpText() string {
 	switch {
 	case ui.state.Approval != "":
 		return "Enter answer · y/yes allow · other deny · Ctrl-C cancel"
+	case len(matchingREPLCommands(ui.editor.Value())) > 0:
+		return "Type to filter · Tab complete · Enter run · ↑↓ history · wheel scroll"
 	case ui.state.Running && ui.mode == consoleInputFollowUp:
-		return "Enter queue · Tab steer · ⇧↑↓/PgUp/PgDn scroll · Ctrl-C stop"
+		return "Enter queue · Tab steer · wheel/PgUp/PgDn scroll · Ctrl-C stop"
 	case ui.state.Running:
-		return "Enter steer · Tab queue · ⇧↑↓/PgUp/PgDn scroll · Ctrl-C stop"
+		return "Enter steer · Tab queue · wheel/PgUp/PgDn scroll · Ctrl-C stop"
 	default:
-		return "Enter send · ↑↓ history · ⇧↑↓/PgUp/PgDn scroll · Ctrl-L clear · Ctrl-C exit"
+		return "Enter send · ↑↓ history · wheel/PgUp/PgDn scroll · Ctrl-L clear · Ctrl-C exit"
 	}
 }

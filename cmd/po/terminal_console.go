@@ -17,6 +17,8 @@ const (
 	defaultTerminalHeight = 24
 	terminalFooterHeight  = 6
 	terminalResizePeriod  = 250 * time.Millisecond
+	terminalEnterScreen   = "\x1b[?1049h\x1b[?2004h\x1b[?1000h\x1b[?1006h\x1b[2J\x1b[H"
+	terminalLeaveScreen   = "\x1b[?1006l\x1b[?1000l\x1b[?2004l\x1b[?25h\x1b[?1049l"
 )
 
 var errConsoleInterrupted = errors.New("interactive console interrupted")
@@ -69,9 +71,23 @@ type terminalShowCommand struct{}
 
 func (terminalShowCommand) terminalCommand() {}
 
+type terminalSelectCommand struct {
+	title   string
+	choices []consoleChoice
+	result  chan terminalSelection
+}
+
+func (terminalSelectCommand) terminalCommand() {}
+
 type terminalQuitCommand struct{}
 
 func (terminalQuitCommand) terminalCommand() {}
+
+type terminalSelection struct {
+	id       string
+	selected bool
+	err      error
+}
 
 // terminalConsole 负责设置原始模式，并通过同一个渲染循环处理输入、运行时事件和尺寸
 // 检查。只有该循环能够写入终端画面。
@@ -200,6 +216,29 @@ func (c *terminalConsole) ClearTranscript() error {
 
 func (c *terminalConsole) ShowPrompt() error { return c.send(terminalShowCommand{}) }
 
+func (c *terminalConsole) SelectChoice(title string, choices []consoleChoice) (string, bool, error) {
+	if err := validateConsoleChoices(title, choices); err != nil {
+		return "", false, err
+	}
+	result := make(chan terminalSelection, 1)
+	if err := c.send(terminalSelectCommand{
+		title:   title,
+		choices: append([]consoleChoice(nil), choices...),
+		result:  result,
+	}); err != nil {
+		return "", false, err
+	}
+	select {
+	case selection := <-result:
+		return selection.id, selection.selected, selection.err
+	case <-c.done:
+		if err := c.result(); err != nil {
+			return "", false, err
+		}
+		return "", false, io.EOF
+	}
+}
+
 func (c *terminalConsole) WriteModelText(text string) error {
 	return c.textStream.WriteString(text)
 }
@@ -255,8 +294,9 @@ func (c *terminalConsole) run(width, height int) {
 	renderer := terminalRenderer{writer: c.stdout}
 	ticker := time.NewTicker(terminalResizePeriod)
 	defer ticker.Stop()
+	var selectionResult chan terminalSelection
 
-	runErr := writeTerminal(c.stdout, "\x1b[?1049h\x1b[?2004h\x1b[2J\x1b[H")
+	runErr := writeTerminal(c.stdout, terminalEnterScreen)
 	if runErr == nil {
 		runErr = renderer.render(ui)
 	}
@@ -281,13 +321,33 @@ func (c *terminalConsole) run(width, height int) {
 			case terminalFinishCommand:
 				ui.finishStream()
 			case terminalShowCommand:
+			case terminalSelectCommand:
+				if selectionResult != nil {
+					selectionResult <- terminalSelection{err: fmt.Errorf("selector is already open")}
+				}
+				selectionResult = current.result
+				ui.openSelector(current.title, current.choices)
 			case terminalQuitCommand:
+				if selectionResult != nil {
+					selectionResult <- terminalSelection{err: io.EOF}
+					selectionResult = nil
+				}
 				runErr = renderer.render(ui)
 				goto finished
 			}
 
 		case key := <-c.keys:
 			action := ui.handleKey(key)
+			if action.selectionDone && selectionResult != nil {
+				selection := terminalSelection{err: action.err}
+				if action.err == nil && action.selectionID != "" {
+					selection.id = action.selectionID
+					selection.selected = true
+				}
+				selectionResult <- selection
+				selectionResult = nil
+				ui.closeSelector()
+			}
 			if action.submit {
 				select {
 				case c.inputs <- consoleInput{line: action.line, mode: action.mode, err: action.err}:
@@ -305,7 +365,7 @@ func (c *terminalConsole) run(width, height int) {
 	}
 
 finished:
-	exitErr := writeTerminal(c.stdout, "\x1b[?2004l\x1b[?25h\x1b[?1049l")
+	exitErr := writeTerminal(c.stdout, terminalLeaveScreen)
 	c.stateMu.Lock()
 	restoreErr := term.Restore(c.inputFD, c.rawState)
 	c.rawState = nil

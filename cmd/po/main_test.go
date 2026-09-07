@@ -40,7 +40,8 @@ func TestRunHelp(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	code := run(context.Background(), []string{"--help"}, strings.NewReader(""), &stdout, &stderr)
-	if code != 0 || !strings.Contains(stderr.String(), "Usage:") {
+	if code != 0 || !strings.Contains(stderr.String(), "Usage:") ||
+		!strings.Contains(stderr.String(), "po config --help") {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
 }
@@ -53,7 +54,7 @@ func TestConfigInitDoesNotPersistAPIKey(t *testing.T) {
 		"config", "init",
 		"--config", path,
 		"--base-url", "https://hub.example/v1",
-		"--model", "Qwen/Qwen3.6-27B",
+		"--model", "provider/default-model",
 	}, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
@@ -67,6 +68,9 @@ func TestConfigInitDoesNotPersistAPIKey(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte(`"api_key_env": "PO_API_KEY"`)) {
 		t.Fatalf("config = %s", data)
+	}
+	if bytes.Contains(data, []byte("context_window")) || bytes.Contains(data, []byte("capabilities")) {
+		t.Fatalf("basic config should not require model internals: %s", data)
 	}
 }
 
@@ -86,10 +90,8 @@ func TestRunPromptAgainstOpenAICompatibleServer(t *testing.T) {
 	defer server.Close()
 
 	path := filepath.Join(t.TempDir(), "config.json")
-	config := qwen36_27BConfig(server.URL+"/v1", "test-model")
-	if err := writeConfig(path, config, false); err != nil {
-		t.Fatal(err)
-	}
+	config := testAppConfig(server.URL+"/v1", "test-model")
+	writeRuntimeConfig(t, path, config)
 	t.Setenv("PO_API_KEY", "test-key")
 
 	var stdout bytes.Buffer
@@ -133,9 +135,7 @@ func TestDoctorChecksStructuredToolCalling(t *testing.T) {
 	defer server.Close()
 
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := writeConfig(path, qwen36_27BConfig(server.URL+"/v1", "test-model"), false); err != nil {
-		t.Fatal(err)
-	}
+	writeRuntimeConfig(t, path, testAppConfig(server.URL+"/v1", "test-model"))
 	t.Setenv("PO_API_KEY", "test-key")
 
 	var stdout bytes.Buffer
@@ -189,9 +189,7 @@ func TestRunPromptCanReadWorkspace(t *testing.T) {
 	defer server.Close()
 
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := writeConfig(path, qwen36_27BConfig(server.URL+"/v1", "test-model"), false); err != nil {
-		t.Fatal(err)
-	}
+	writeRuntimeConfig(t, path, testAppConfig(server.URL+"/v1", "test-model"))
 	t.Setenv("PO_API_KEY", "test-key")
 
 	var stdout bytes.Buffer
@@ -244,9 +242,7 @@ func TestWriteToolsRequireExplicitAllowWrite(t *testing.T) {
 	defer server.Close()
 
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := writeConfig(path, qwen36_27BConfig(server.URL+"/v1", "test-model"), false); err != nil {
-		t.Fatal(err)
-	}
+	writeRuntimeConfig(t, path, testAppConfig(server.URL+"/v1", "test-model"))
 	t.Setenv("PO_API_KEY", "test-key")
 
 	var stdout bytes.Buffer
@@ -304,9 +300,7 @@ func TestRunAllowWriteCanCreateWorkspaceFile(t *testing.T) {
 	defer server.Close()
 
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := writeConfig(path, qwen36_27BConfig(server.URL+"/v1", "test-model"), false); err != nil {
-		t.Fatal(err)
-	}
+	writeRuntimeConfig(t, path, testAppConfig(server.URL+"/v1", "test-model"))
 	t.Setenv("PO_API_KEY", "test-key")
 
 	var stdout bytes.Buffer

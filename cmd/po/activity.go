@@ -14,14 +14,20 @@ const maxActivityRunes = 56
 
 type promptController struct {
 	mu      sync.Mutex
-	console replConsole
+	console promptConsole
 
 	activity string
 	approval string
+	model    string
 	running  bool
 }
 
-func newPromptController(console replConsole) *promptController {
+type promptConsole interface {
+	SetState(consoleState) error
+	ShowPrompt() error
+}
+
+func newPromptController(console promptConsole) *promptController {
 	return &promptController{console: console}
 }
 
@@ -42,10 +48,18 @@ func (p *promptController) SetApproval(toolName string) {
 	_ = p.console.SetState(state)
 }
 
+func (p *promptController) SetModel(model string) {
+	p.mu.Lock()
+	p.model = compactActivity(model)
+	state := p.stateLocked()
+	p.mu.Unlock()
+	_ = p.console.SetState(state)
+}
+
 func (p *promptController) Show() { _ = p.console.ShowPrompt() }
 
 func (p *promptController) stateLocked() consoleState {
-	return consoleState{Activity: p.activity, Approval: p.approval, Running: p.running}
+	return consoleState{Activity: p.activity, Approval: p.approval, Model: p.model, Running: p.running}
 }
 
 type activeTool struct {

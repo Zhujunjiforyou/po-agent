@@ -16,6 +16,8 @@ func TestCoreDoesNotImportOptionalExtensions(t *testing.T) {
 	modulePath := modulePathFromGoMod(t)
 	forbidden := []string{
 		modulePath + "/guard",
+		modulePath + "/internal/appconfig",
+		modulePath + "/internal/modelcatalog",
 		modulePath + "/policy",
 		modulePath + "/provider",
 		modulePath + "/workspace",
@@ -27,10 +29,7 @@ func TestCoreDoesNotImportOptionalExtensions(t *testing.T) {
 		modulePath + "/tool/timeout",
 		modulePath + "/tool/output",
 		modulePath + "/tool/concurrency",
-		modulePath + "/tool/output",
 		modulePath + "/session",
-		modulePath + "/tool/concurrency",
-		modulePath + "/tool/output",
 	}
 
 	entries, err := os.ReadDir(".")
@@ -65,7 +64,6 @@ func TestCoreDoesNotImportOptionalExtensions(t *testing.T) {
 			}
 		}
 	}
-
 }
 
 func modulePathFromGoMod(t *testing.T) string {

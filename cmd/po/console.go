@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -13,6 +14,7 @@ import (
 type consoleState struct {
 	Activity string
 	Approval string
+	Model    string
 	Running  bool
 }
 
@@ -38,6 +40,37 @@ type replConsole interface {
 	ClearTranscript() error
 	SetState(consoleState) error
 	ShowPrompt() error
+	SelectChoice(string, []consoleChoice) (string, bool, error)
+}
+
+// consoleChoice 是终端选择器的通用视图模型。ID 只会返回给调用方，终端层不解释
+// 其业务含义。
+type consoleChoice struct {
+	ID          string
+	Group       string
+	Label       string
+	Description string
+	Current     bool
+}
+
+func validateConsoleChoices(title string, choices []consoleChoice) error {
+	if strings.TrimSpace(title) == "" {
+		return fmt.Errorf("selector title is required")
+	}
+	if len(choices) == 0 {
+		return fmt.Errorf("no choices are available")
+	}
+	seen := make(map[string]struct{}, len(choices))
+	for _, choice := range choices {
+		if strings.TrimSpace(choice.ID) == "" || strings.TrimSpace(choice.Label) == "" {
+			return fmt.Errorf("selector choices require an ID and label")
+		}
+		if _, duplicate := seen[choice.ID]; duplicate {
+			return fmt.Errorf("duplicate selector choice ID %q", choice.ID)
+		}
+		seen[choice.ID] = struct{}{}
+	}
+	return nil
 }
 
 type consoleInputMode uint8
@@ -161,4 +194,48 @@ func (c *plainConsole) ShowPrompt() error {
 	c.stateMu.Unlock()
 	_, err := io.WriteString(c.meta, prompt)
 	return err
+}
+
+func (c *plainConsole) SelectChoice(title string, choices []consoleChoice) (string, bool, error) {
+	if err := validateConsoleChoices(title, choices); err != nil {
+		return "", false, err
+	}
+	var display strings.Builder
+	display.WriteString(title + ":\n")
+	group := ""
+	for index, choice := range choices {
+		if choice.Group != group {
+			group = choice.Group
+			fmt.Fprintf(&display, "  [%s]\n", group)
+		}
+		marker := ""
+		if choice.Current {
+			marker = "  (current)"
+		}
+		fmt.Fprintf(&display, "  %2d  %s%s", index+1, choice.Label, marker)
+		if choice.Description != "" {
+			fmt.Fprintf(&display, "  %s", choice.Description)
+		}
+		display.WriteByte('\n')
+	}
+	display.WriteString("select a number (empty to cancel):")
+	if err := c.Print(display.String()); err != nil {
+		return "", false, err
+	}
+	input := c.ReadInput()
+	if input.err != nil {
+		if input.err == io.EOF {
+			return "", false, nil
+		}
+		return "", false, input.err
+	}
+	value := strings.TrimSpace(input.line)
+	if value == "" {
+		return "", false, nil
+	}
+	selected, err := strconv.Atoi(value)
+	if err != nil || selected < 1 || selected > len(choices) {
+		return "", false, fmt.Errorf("invalid selection %q", value)
+	}
+	return choices[selected-1].ID, true, nil
 }

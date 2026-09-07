@@ -13,10 +13,9 @@ import (
 	"syscall"
 
 	po "github.com/lemonzjj/po-agent-go"
-	"github.com/lemonzjj/po-agent-go/model/retry"
+	"github.com/lemonzjj/po-agent-go/internal/appconfig"
 	"github.com/lemonzjj/po-agent-go/policy"
 	"github.com/lemonzjj/po-agent-go/project"
-	openai "github.com/lemonzjj/po-agent-go/provider/openai"
 )
 
 // version 会在发布构建中通过以下命令替换：
@@ -37,7 +36,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			fmt.Fprintf(stdout, "po %s\n", version)
 			return 0
 		case "config":
-			return runConfig(args[1:], stdout, stderr)
+			return runConfig(ctx, args[1:], stdout, stderr)
 		case "doctor":
 			return runDoctor(ctx, args[1:], stdout, stderr)
 		case "trust":
@@ -90,11 +89,6 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	config, err := loadAppConfig(path)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
 
 	trustPath, err := defaultTrustPath()
 	if err != nil {
@@ -108,30 +102,58 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	trusted := *trustProject || trustStore.Decision(*workspacePath) == project.TrustAlways
 	localConfigPath := filepath.Join(*workspacePath, ".po", "config.json")
+	var localConfig *appconfig.Project
 	if trusted {
-		if local, err := loadProjectConfig(localConfigPath); err == nil {
-			config = applyProjectConfig(config, local)
+		if local, err := appconfig.LoadProject(localConfigPath); err == nil {
+			localConfig = &local
 		} else if !os.IsNotExist(err) {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 	}
 
-	if *baseURL != "" {
-		config.BaseURL = *baseURL
-	}
-	if *modelID != "" {
-		config.Model = *modelID
-	}
-	if *noTools {
-		config.Tools = false
-		config.ParallelToolCalls = false
-	}
-	if err := config.validate(); err != nil {
-		fmt.Fprintf(stderr, "config: %v\n", err)
+	document, err := appconfig.Load(path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	apiKey, err := resolveAPIKey(config)
+	selection := appconfig.Selection{Model: strings.TrimSpace(os.Getenv("PO_MODEL"))}
+	if localConfig != nil {
+		selection = localConfig.Select(selection)
+	}
+	if value := strings.TrimSpace(*modelID); value != "" {
+		selection.Model = value
+	}
+	config, err := document.Resolve(selection)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	adjustConfig := func(candidate appconfig.Runtime) (appconfig.Runtime, error) {
+		if value := strings.TrimSpace(os.Getenv("PO_BASE_URL")); value != "" {
+			candidate.BaseURL = value
+		}
+		if localConfig != nil {
+			candidate = localConfig.Apply(candidate)
+		}
+		if *baseURL != "" {
+			candidate.BaseURL = *baseURL
+		}
+		if *noTools {
+			candidate.Tools = false
+			candidate.ParallelToolCalls = false
+		}
+		if err := candidate.Validate(); err != nil {
+			return appconfig.Runtime{}, fmt.Errorf("config: %w", err)
+		}
+		return candidate, nil
+	}
+	config, err = adjustConfig(config)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	apiKey, err := appconfig.ResolveAPIKey(config, os.Getenv)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -203,7 +225,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		)
 		return 1
 	}
-	return runREPL(ctx, runtime.Agent, opened, interactiveApproval, console)
+	models := newREPLModelManager(path, config, runtime, adjustConfig)
+	return runREPL(ctx, runtime, models, opened, interactiveApproval, console)
 }
 
 func runPrint(ctx context.Context, agent *po.Agent, output *plainModelOutput, text string, stderr io.Writer) int {
@@ -231,19 +254,13 @@ func runPrint(ctx context.Context, agent *po.Agent, output *plainModelOutput, te
 	return 0
 }
 
-func buildModel(config appConfig, apiKey string) (po.Model, error) {
-	base, err := openai.New(config.providerConfig(apiKey))
-	if err != nil {
-		return nil, fmt.Errorf("create provider model: %w", err)
-	}
-	return retry.New(base, retry.DefaultPolicy(), nil)
-}
 func chooseConfigPath(explicit string) (string, error) {
 	if strings.TrimSpace(explicit) != "" {
 		return explicit, nil
 	}
-	return defaultConfigPath()
+	return appconfig.DefaultPath()
 }
+
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Po Agent Go")
 	fmt.Fprintln(w, "Usage:")
@@ -256,5 +273,5 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  po trust allow --workspace .")
 	fmt.Fprintln(w, "  po session inspect --file FILE")
 	fmt.Fprintln(w, "  po session recover --file FILE --note NOTE")
-	fmt.Fprintln(w, "  po config init --profile qwen3.6-27b --base-url URL --model MODEL")
+	fmt.Fprintln(w, "  po config --help")
 }
