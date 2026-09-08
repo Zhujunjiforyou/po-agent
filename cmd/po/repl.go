@@ -196,6 +196,16 @@ func runREPL(
 					if err := models.Switch(choice); err != nil {
 						_ = console.Print(fmt.Sprintf("[models] switch failed: %v", err))
 					} else {
+						sessionOptions, contextErr := runtime.NewSessionOptions()
+						if contextErr == nil {
+							contextErr = opened.Session.SetContextBuilder(sessionOptions.ContextBuilder)
+						}
+						if contextErr != nil {
+							_ = console.Print(fmt.Sprintf("[models] context setup failed: %v", contextErr))
+							prompt.Show()
+							inputs = readConsoleInput(console)
+							continue
+						}
 						unsubscribe()
 						agent = runtime.Agent
 						unsubscribe = agent.Subscribe(activity.Observe)

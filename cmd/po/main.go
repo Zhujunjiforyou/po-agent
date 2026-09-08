@@ -194,21 +194,26 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if text != "" {
 		return runPrint(ctx, runtime.Agent, printOutput, text, stderr)
 	}
+	sessionOptions, err := runtime.NewSessionOptions()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 
 	var opened *openedSession
 	switch {
 	case strings.TrimSpace(*sessionPath) != "":
-		opened, err = openSession(*sessionPath)
+		opened, err = openSessionWithOptions(*sessionPath, sessionOptions)
 	case *continueSession:
 		var latest string
 		latest, err = latestSessionPath()
 		if err == nil && latest != "" {
-			opened, err = openSession(latest)
+			opened, err = openSessionWithOptions(latest, sessionOptions)
 		} else if err == nil {
-			opened, err = createSession()
+			opened, err = createSessionWithOptions(sessionOptions)
 		}
 	default:
-		opened, err = createSession()
+		opened, err = createSessionWithOptions(sessionOptions)
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)

@@ -27,6 +27,10 @@ func defaultSessionsDir() (string, error) {
 }
 
 func createSession() (*openedSession, error) {
+	return createSessionWithOptions(session.Options{})
+}
+
+func createSessionWithOptions(options session.Options) (*openedSession, error) {
 	dir, err := defaultSessionsDir()
 	if err != nil {
 		return nil, err
@@ -41,7 +45,7 @@ func createSession() (*openedSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	sess, err := session.New(id, now, journal)
+	sess, err := session.NewWithOptions(id, now, journal, options)
 	if err != nil {
 		journal.Close()
 		return nil, err
@@ -50,11 +54,15 @@ func createSession() (*openedSession, error) {
 }
 
 func openSession(path string) (*openedSession, error) {
+	return openSessionWithOptions(path, session.Options{})
+}
+
+func openSessionWithOptions(path string, options session.Options) (*openedSession, error) {
 	journal, state, err := sessionjsonl.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	sess, err := session.Resume(state, journal)
+	sess, err := session.ResumeWithOptions(state, journal, options)
 	if err != nil {
 		journal.Close()
 		return nil, err

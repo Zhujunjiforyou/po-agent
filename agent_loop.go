@@ -96,6 +96,7 @@ func (a *Agent) runControlled(runCtx context.Context, runID string, initialMessa
 	control *runControl, options RunOptions) (RunResult, error) {
 	state := newRunState(runID, time.Now(), initialMessages)
 	tools := a.tools
+	projectInitialContext := options.ProjectInitialContext
 	a.emit(runCtx, RunStartEvent{RunID: runID})
 
 	finish := func(finalText string, reason RunStopReason, runErr error) (RunResult, error) {
@@ -124,7 +125,7 @@ func (a *Agent) runControlled(runCtx context.Context, runID string, initialMessa
 			turnEnded = true
 			a.emit(runCtx, TurnEndEvent{RunID: runID, TurnID: turnID, Turn: state.turnAttempts})
 		}
-		modelMessages := append([]Message(nil), state.messages...)
+		modelMessages := state.messages
 		if options.ContextBuilder != nil {
 			view, err := options.ContextBuilder.Build(runCtx, ContextBuildInput{
 				SystemPrompt:    a.systemPrompt,
@@ -138,6 +139,14 @@ func (a *Agent) runControlled(runCtx context.Context, runID string, initialMessa
 				return finish("", RunStopFailed, fmt.Errorf("build model context: %w", err))
 			}
 			modelMessages = view.Messages
+			if projectInitialContext {
+				// The durable Session owns the complete transcript. This Run only needs
+				// the bounded projection plus facts generated after it.
+				state.messages = append([]Message(nil), modelMessages...)
+				state.initialCount = len(state.messages)
+				modelMessages = state.messages
+				projectInitialContext = false
+			}
 		}
 
 		request, err := NewModelRequest(a.systemPrompt, modelMessages, tools.Specs(), a.maxOutputTokens)

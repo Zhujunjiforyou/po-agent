@@ -141,7 +141,7 @@ func (m *replModelManager) Switch(choice modelChoice) error {
 	if err != nil {
 		return err
 	}
-	agent, err := m.runtime.prepareAgent(config, apiKey)
+	agent, model, err := m.runtime.prepareAgent(config, apiKey)
 	if err != nil {
 		return err
 	}
@@ -149,6 +149,8 @@ func (m *replModelManager) Switch(choice modelChoice) error {
 		return err
 	}
 	m.runtime.Agent = agent
+	m.runtime.model = model
+	m.runtime.modelConfig = config
 	m.current = config
 	return nil
 }

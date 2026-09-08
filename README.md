@@ -180,6 +180,8 @@ po --continue
 po --session /path/to/session.jsonl
 ```
 
+交互会话默认为每个 Session 创建独立的 `ContextBuilder`。JSONL 仍保留完整原始对话；当估算的 token 超出当前模型窗口时，只对发给模型的上下文视图做分段摘要。切换模型会按新模型的窗口重建该策略。
+
 如果程序在一轮任务中间退出，Po 不会猜测已经调用的工具是否真正执行成功。检查工作区后，可以手动记录恢复结果：
 
 ```sh
@@ -211,6 +213,12 @@ JSONL 最后一行只写了一部分时，重新打开会话会丢弃这段不�
 ```
 
 该脚本会检查代码格式、模块依赖、普通测试、竞态问题和 `go vet`。
+
+仓库还包含一项默认跳过的真实模型多次压缩质量测试。它会消耗真实 token，只在显式提供 `PO_LIVE_CONTEXT_TEST=1` 以及 `PO_LIVE_BASE_URL`、`PO_LIVE_MODEL`、`PO_LIVE_API_KEY` 时运行：
+
+```sh
+go test -v ./cmd/po -run TestLiveRepeatedContextCompressionQuality
+```
 
 ## 注意
 

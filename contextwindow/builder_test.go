@@ -121,6 +121,52 @@ func TestBuilderNeverStartsTailAtToolResult(t *testing.T) {
 	}
 }
 
+func TestBuilderChunksOversizedRestoredTranscriptBeforeSummarizing(t *testing.T) {
+	const messageBudget = 40
+	var calls int
+	builder, err := New(Config{ReserveTokens: 10, KeepRecentTokens: 20, MaxSummaryTokens: 10}, fixedCounter{}, SummarizerFunc(
+		func(ctx context.Context, request SummaryRequest) (Summary, error) {
+			calls++
+			inputTokens := len(request.Messages) * 10
+			if request.PreviousSummary != "" {
+				inputTokens += 10
+			}
+			if inputTokens > messageBudget {
+				return Summary{}, fmt.Errorf("summary request tokens = %d, budget = %d", inputTokens, messageBudget)
+			}
+			return Summary{Text: fmt.Sprintf("summary-%d", calls)}, nil
+		},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	messages := make([]po.Message, 0, 20)
+	for turn := 0; turn < 10; turn++ {
+		messages = append(messages,
+			user(t, fmt.Sprintf("u-%02d", turn)),
+			assistant(t, fmt.Sprintf("a-%02d", turn)),
+		)
+	}
+	view, err := builder.Build(context.Background(), po.ContextBuildInput{
+		Messages:        messages,
+		Model:           po.ModelInfo{Limits: po.ModelLimits{ContextWindow: 60, MaxOutputTokens: 10}},
+		MaxOutputTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls < 2 {
+		t.Fatalf("summarizer calls = %d, want multiple bounded chunks", calls)
+	}
+	if got := len(view.Messages); got > 5 {
+		t.Fatalf("context messages = %d, want a bounded summary projection", got)
+	}
+	if got := view.Messages[1].MessageID(); got != "u-08" {
+		t.Fatalf("first kept message = %q, want u-08", got)
+	}
+}
+
 func TestApproxCounterDoesNotUndercountCJKAsBytesDividedByFour(t *testing.T) {
 	counter := ApproxCounter{}
 	message, err := po.NewUserTextMessage("u-cjk", "你好世界")

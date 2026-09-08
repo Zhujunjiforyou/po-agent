@@ -156,11 +156,12 @@ func (b *Builder) Build(ctx context.Context, input po.ContextBuildInput) (po.Con
 	if err != nil {
 		return po.ContextBuildResult{}, err
 	}
+	projectedTokens := b.countMessages(projected)
 
-	if b.countMessages(projected) <= messageBudget {
+	if projectedTokens <= messageBudget {
 		b.lastStats = Stats{
 			FullTranscriptTokens: fullTokens,
-			ContextTokens:        b.countMessages(projected),
+			ContextTokens:        projectedTokens,
 			MessageBudget:        messageBudget,
 			Compacted:            previousSummary != "",
 		}
@@ -170,14 +171,25 @@ func (b *Builder) Build(ctx context.Context, input po.ContextBuildInput) (po.Con
 	if b.summarizer == nil {
 		return po.ContextBuildResult{}, ErrNoSummarizer
 	}
+	summaryBudget := messageBudget - b.config.MaxSummaryTokens
+	if summaryBudget <= 0 {
+		return po.ContextBuildResult{}, fmt.Errorf(
+			"%w: summary output and fixed-overhead reserve exhaust model context window",
+			ErrInvalidConfig,
+		)
+	}
 
-	// 通常一次 Compaction 就足够。循环用于处理摘要仍然过大，或一个超长 Turn
-	// 需要把更早的安全边界继续合并进已有摘要的情况。固定上限避免异常 Summarizer
-	// 在一次模型请求前无限发起隐藏调用。
-	for attempt := 0; attempt < 8; attempt++ {
-		cut := b.chooseCut(tail)
-		if cut <= 0 || cut >= len(tail) {
+	// 恢复一个没有持久化 checkpoint 的大会话时，不能把整段旧历史一次性
+	// 塞给 Summarizer，否则主请求虽然受限，摘要请求却可能首先爆掉模型窗口。
+	// 这里以主请求的 message budget 作为摘要输入上限，并逐段合并。
+	for len(tail) > 1 {
+		targetCut := b.chooseCut(tail)
+		if targetCut <= 0 || targetCut >= len(tail) {
 			return po.ContextBuildResult{}, ErrCannotCompact
+		}
+		cut := b.chooseSummaryChunk(tail, targetCut, previousSummary, summaryBudget)
+		if cut <= 0 {
+			return po.ContextBuildResult{}, ErrSummaryTooLarge
 		}
 
 		summary, err := b.summarizer.Summarize(ctx, SummaryRequest{
@@ -191,7 +203,6 @@ func (b *Builder) Build(ctx context.Context, input po.ContextBuildInput) (po.Con
 		if strings.TrimSpace(summary.Text) == "" {
 			return po.ContextBuildResult{}, fmt.Errorf("summarize context: empty summary")
 		}
-
 		previousSummary = summary.Text
 		tail = tail[cut:]
 		checkpoint := Checkpoint{Summary: previousSummary, FirstKeptMessageID: tail[0].MessageID()}
@@ -274,15 +285,18 @@ func (b *Builder) messageBudget(input po.ContextBuildInput) (int, error) {
 // 保守地丢弃缓存并从完整 Transcript 重新开始。
 func (b *Builder) applyCheckpoint(messages []po.Message) ([]po.Message, string) {
 	if b.checkpoint == nil {
-		return append([]po.Message(nil), messages...), ""
+		return messages, ""
 	}
-	for index, message := range messages {
+	// The checkpoint normally sits close to the current tail. Search backwards so
+	// steady-state work is proportional to retained context, not the full Session.
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
 		if message.MessageID() == b.checkpoint.FirstKeptMessageID {
-			return append([]po.Message(nil), messages[index:]...), b.checkpoint.Summary
+			return messages[index:], b.checkpoint.Summary
 		}
 	}
 	b.checkpoint = nil
-	return append([]po.Message(nil), messages...), ""
+	return messages, ""
 }
 
 // chooseCut 尽量保留 KeepRecentTokens 的最近原始消息，并优先从 User 边界切分。
@@ -323,6 +337,50 @@ func (b *Builder) chooseCut(messages []po.Message) int {
 	return 0
 }
 
+// chooseSummaryChunk caps one hidden summarization request. targetCut is the
+// complete old prefix that eventually needs compacting; the returned cut may be
+// smaller when a restored transcript spans multiple model windows.
+func (b *Builder) chooseSummaryChunk(messages []po.Message, targetCut int, previousSummary string, budget int) int {
+	used := b.countSummary(previousSummary)
+	maxCut := 0
+	for index := 0; index < targetCut; index++ {
+		next := b.counter.CountMessage(messages[index])
+		if used+next > budget {
+			break
+		}
+		used += next
+		maxCut = index + 1
+	}
+	if maxCut == 0 || maxCut == targetCut {
+		return maxCut
+	}
+
+	// Prefer leaving the next chunk at a user boundary. If a single turn is too
+	// large, an assistant boundary is still valid; an orphan tool result is not.
+	for cut := maxCut; cut > 0; cut-- {
+		if messages[cut].Kind() == po.MessageUser {
+			return cut
+		}
+	}
+	for cut := maxCut; cut > 0; cut-- {
+		if messages[cut].Kind() == po.MessageAssistant {
+			return cut
+		}
+	}
+	return 0
+}
+
+func (b *Builder) countSummary(summary string) int {
+	if strings.TrimSpace(summary) == "" {
+		return 0
+	}
+	message, err := po.NewUserTextMessage("context-summary-budget", summary)
+	if err != nil {
+		return 0
+	}
+	return b.counter.CountMessage(message)
+}
+
 func (b *Builder) countMessages(messages []po.Message) int {
 	total := 0
 	for _, message := range messages {
@@ -333,7 +391,7 @@ func (b *Builder) countMessages(messages []po.Message) int {
 
 func buildProjectedMessages(summary string, tail []po.Message) ([]po.Message, error) {
 	if summary == "" {
-		return append([]po.Message(nil), tail...), nil
+		return tail, nil
 	}
 
 	// Summary 是 Runtime 生成的历史数据，不应被提升成 System Prompt 权威指令。

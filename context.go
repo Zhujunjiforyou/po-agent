@@ -38,4 +38,10 @@ func (f ContextBuilderFunc) Build(ctx context.Context, input ContextBuildInput) 
 // 服务多个 Session，而每个 Session 的 Compaction checkpoint / Context policy 都可能不同。
 type RunOptions struct {
 	ContextBuilder ContextBuilder
+
+	// ProjectInitialContext lets a Session keep the complete durable transcript
+	// separately while the Run state owns only the ContextBuilder projection.
+	// Direct Agent callers leave this false and retain the historical behavior in
+	// which RunResult.Messages contains their complete input transcript.
+	ProjectInitialContext bool
 }

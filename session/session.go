@@ -128,7 +128,14 @@ func (t Transcript) Messages() []po.Message {
 }
 
 func (t *Transcript) replace(messages []po.Message) {
-	t.messages = append(t.messages[:0], messages...)
+	// A completed RunResult may retain the old immutable prefix for lazy logical
+	// transcript reconstruction. Allocate on branch replacement so it cannot be
+	// overwritten by a later BranchTo operation.
+	t.messages = append([]po.Message(nil), messages...)
+}
+
+func (t *Transcript) append(messages ...po.Message) {
+	t.messages = append(t.messages, messages...)
 }
 
 // Options 保存属于某个 Session 的可选运行策略。
@@ -147,6 +154,7 @@ type Session struct {
 	createdAt      time.Time
 	history        *History
 	transcript     Transcript
+	context        []po.Message
 	journal        Journal
 	contextBuilder po.ContextBuilder
 	pending        *PendingRun
@@ -196,7 +204,7 @@ func ResumeWithOptions(state State, journal Journal, options Options) (*Session,
 		pending = &copy
 	}
 
-	return &Session{
+	session := &Session{
 		id:             state.ID,
 		createdAt:      state.CreatedAt,
 		history:        history,
@@ -204,7 +212,11 @@ func ResumeWithOptions(state State, journal Journal, options Options) (*Session,
 		journal:        journal,
 		contextBuilder: options.ContextBuilder,
 		pending:        pending,
-	}, nil
+	}
+	if options.ContextBuilder != nil {
+		session.context = append([]po.Message(nil), messages...)
+	}
+	return session, nil
 }
 
 func (s *Session) ID() string {
@@ -235,6 +247,23 @@ func (s *Session) Transcript() Transcript {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return Transcript{messages: s.transcript.Messages()}
+}
+
+// SetContextBuilder changes the per-Session context policy between Runs. The
+// next Run starts from the complete durable transcript so a new model/policy
+// never inherits an incompatible in-memory checkpoint.
+func (s *Session) SetContextBuilder(builder po.ContextBuilder) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return ErrSessionBusy
+	}
+	s.contextBuilder = builder
+	s.context = nil
+	if builder != nil {
+		s.context = append([]po.Message(nil), s.transcript.messages...)
+	}
+	return nil
 }
 
 // BranchTo 把活动叶节点切换到一条历史消息，后续 Prompt 将从那里创建新分支。
@@ -268,6 +297,9 @@ func (s *Session) BranchTo(ctx context.Context, messageID string) error {
 		return err
 	}
 	s.transcript.replace(messages)
+	if s.contextBuilder != nil {
+		s.context = append([]po.Message(nil), messages...)
+	}
 	return nil
 }
 
@@ -381,7 +413,7 @@ func (s *Session) Start(ctx context.Context, agent *po.Agent, user po.UserMessag
 		return nil, fmt.Errorf("session start user message: %w", err)
 	}
 
-	baseMessages, userEntry, err := s.beginPrompt(user)
+	userEntry, err := s.beginPrompt(user)
 	if err != nil {
 		return nil, err
 	}
@@ -416,8 +448,7 @@ func (s *Session) Start(ctx context.Context, agent *po.Agent, user po.UserMessag
 
 	s.setPending(&attempt)
 
-	input := append(baseMessages, user)
-	handle, err := agent.StartMessagesWithOptions(ctx, input, po.RunOptions{ContextBuilder: s.contextBuilder})
+	handle, err := s.startAgent(ctx, agent)
 	if err != nil {
 		// Agent 根本没有启动成功。只有 run_end marker 也成功落盘后，才能清除 pending；
 		// 否则磁盘仍然会在下次 Resume 时看到一个未闭合尝试。
@@ -436,7 +467,7 @@ func (s *Session) Start(ctx context.Context, agent *po.Agent, user po.UserMessag
 
 	go func() {
 		result, runErr := handle.Wait()
-		finalErr := s.commitRun(input, result, runErr, attempt)
+		result, finalErr := s.commitRun(result, runErr, attempt)
 
 		// 先允许下一次 Prompt，再关闭 Session Run 的 Done。
 		// 因此调用方观察到 Done 时，Session 已经完全 settle，可以安全开始下一轮。
@@ -447,17 +478,22 @@ func (s *Session) Start(ctx context.Context, agent *po.Agent, user po.UserMessag
 	return sessionRun, nil
 }
 
-func (s *Session) commitRun(input []po.Message, result po.RunResult, runErr error, attempt PendingRun) error {
+func (s *Session) commitRun(result po.RunResult, runErr error, attempt PendingRun) (po.RunResult, error) {
 	resultMessages := result.Messages()
-	if len(resultMessages) < len(input) {
-		invariantErr := fmt.Errorf("agent returned transcript shorter than input: got %d, input %d", len(resultMessages), len(input))
-		return errors.Join(runErr, invariantErr)
+	inputLen := result.InitialMessageCount()
+	if len(resultMessages) < inputLen {
+		invariantErr := fmt.Errorf("agent returned transcript shorter than input: got %d, input %d", len(resultMessages), inputLen)
+		return result, errors.Join(runErr, invariantErr)
 	}
-	newMessages := resultMessages[len(input):]
+	newMessages := resultMessages[inputLen:]
 	entries, err := s.prepareEntries(newMessages)
 	if err != nil {
-		return errors.Join(runErr, err)
+		return result, errors.Join(runErr, err)
 	}
+	// Preserve the public RunResult contract without eagerly rebuilding the full
+	// transcript on every turn. The Session is single-writer, so this fixed-length
+	// prefix remains immutable while the result lazily joins it with newMessages.
+	result = result.WithTranscriptPrefix(s.transcriptView())
 
 	// 先把完整批次写入持久化 Journal，再推进内存中的活动分支。
 	// 如果反过来先修改内存，一旦磁盘写失败，当前进程会看到一条“磁盘上从未提交”的分支；
@@ -472,40 +508,68 @@ func (s *Session) commitRun(input []po.Message, result po.RunResult, runErr erro
 	if persistErr != nil {
 		// run_start 已经 durable，但本次新消息没有全部确认提交，所以保留 pending。
 		// 下一次恢复必须显式检查真实副作用状态，不能自动继续或重放 Tool。
-		return errors.Join(runErr, persistErr)
+		return result, errors.Join(runErr, persistErr)
 	}
 
-	if err := s.commitEntries(entries); err != nil {
-		return errors.Join(runErr, fmt.Errorf("commit persisted run messages: %w", err))
+	if err := s.commitRunEntries(entries, resultMessages); err != nil {
+		return result, errors.Join(runErr, fmt.Errorf("commit persisted run messages: %w", err))
 	}
 
 	if s.journal != nil {
 		if err := s.journal.EndRun(context.Background(), attempt.AttemptID, result.RunID(), runErr); err != nil {
-			return errors.Join(runErr, fmt.Errorf("persist run end marker: %w", err))
+			return result, errors.Join(runErr, fmt.Errorf("persist run end marker: %w", err))
 		}
 	}
 
 	s.setPending(nil)
 
-	return runErr
+	return result, runErr
 }
 
-func (s *Session) beginPrompt(user po.UserMessage) ([]po.Message, Entry, error) {
+func (s *Session) transcriptView() []po.Message {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.transcript.messages
+}
+
+func (s *Session) beginPrompt(user po.UserMessage) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.running {
-		return nil, Entry{}, ErrSessionBusy
+		return Entry{}, ErrSessionBusy
 	}
 	if s.pending != nil {
-		return nil, Entry{}, ErrRecoveryRequired
+		return Entry{}, ErrRecoveryRequired
 	}
 	entry, err := s.history.PrepareAppend(user, time.Now().UTC())
 	if err != nil {
-		return nil, Entry{}, err
+		return Entry{}, err
 	}
 	s.running = true
-	return s.transcript.Messages(), entry, nil
+	return entry, nil
+}
+
+// startAgent holds a read lock until Agent has synchronously validated and copied
+// the transcript slice. A running Session cannot otherwise change its active
+// branch, so this avoids another full-history copy without exposing mutable state.
+func (s *Session) startAgent(ctx context.Context, agent *po.Agent) (*po.RunHandle, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	messages := s.transcript.messages
+	if s.contextBuilder != nil {
+		messages = s.context
+	}
+	handle, err := agent.StartMessagesWithOptions(
+		ctx,
+		messages,
+		po.RunOptions{
+			ContextBuilder:        s.contextBuilder,
+			ProjectInitialContext: s.contextBuilder != nil,
+		},
+	)
+	return handle, err
 }
 
 // prepareEntries 在不修改真实 History 的前提下，为一批连续消息确定稳定 parent chain。
@@ -559,12 +623,28 @@ func (s *Session) commitEntries(entries []Entry) error {
 		if err := s.history.AppendEntry(entry); err != nil {
 			return err
 		}
+		s.transcript.append(entry.Message)
+		if s.contextBuilder != nil {
+			s.context = append(s.context, entry.Message)
+		}
 	}
-	messages, err := s.history.Messages()
-	if err != nil {
-		return err
+	return nil
+}
+
+func (s *Session) commitRunEntries(entries []Entry, contextMessages []po.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, entry := range entries {
+		if err := s.history.AppendEntry(entry); err != nil {
+			return err
+		}
+		s.transcript.append(entry.Message)
 	}
-	s.transcript.replace(messages)
+	if s.contextBuilder != nil {
+		// result.Messages returned an owned slice, so the bounded context can take it.
+		s.context = contextMessages
+	}
 	return nil
 }
 

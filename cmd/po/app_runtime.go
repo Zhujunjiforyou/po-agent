@@ -31,6 +31,8 @@ type appRuntime struct {
 	Agent     *po.Agent
 	Workspace *workspace.Workspace
 
+	model          po.Model
+	modelConfig    appconfig.Runtime
 	tools          *po.ToolRegistry
 	systemPrompt   string
 	beforeToolCall po.BeforeToolCallHook
@@ -114,21 +116,23 @@ func buildAppRuntime(config appconfig.Runtime, apiKey string, opts runtimeOption
 // 不变，因此交互会话可以在不丢失 Transcript 的情况下切换模型。调用方必须
 // 保证当前没有正在执行的 Run。
 func (r *appRuntime) SwitchModel(config appconfig.Runtime, apiKey string) error {
-	agent, err := r.prepareAgent(config, apiKey)
+	agent, model, err := r.prepareAgent(config, apiKey)
 	if err != nil {
 		return err
 	}
 	r.Agent = agent
+	r.model = model
+	r.modelConfig = config
 	return nil
 }
 
-func (r *appRuntime) prepareAgent(config appconfig.Runtime, apiKey string) (*po.Agent, error) {
+func (r *appRuntime) prepareAgent(config appconfig.Runtime, apiKey string) (*po.Agent, po.Model, error) {
 	if r == nil {
-		return nil, fmt.Errorf("runtime is nil")
+		return nil, nil, fmt.Errorf("runtime is nil")
 	}
 	model, err := buildModel(config, apiKey)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tools := r.tools
 	if !config.Tools {
@@ -146,9 +150,9 @@ func (r *appRuntime) prepareAgent(config appconfig.Runtime, apiKey string) (*po.
 		EmitModelDelta:   r.emitDelta,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return agent, nil
+	return agent, model, nil
 }
 
 func appResourceClaims(call po.ToolCall) ([]po.ResourceClaim, error) {

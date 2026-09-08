@@ -42,15 +42,21 @@ const (
 // messages 保存完整 Transcript；finalText 只保存适合直接显示给用户的最终文本。
 // 两者分开非常重要：一个 Run 即使最终文本很短，也可能已经产生大量工具事实消息。
 type RunResult struct {
-	runID      string
-	messages   []Message
-	finalText  string
-	stopReason RunStopReason
-	usage      Usage
+	runID    string
+	messages []Message
+	// transcriptPrefix is populated by Session when messages contains a bounded
+	// context projection. It lets Messages reconstruct the complete logical
+	// transcript lazily, so callers keep the historical API without forcing an
+	// O(history) copy after every turn.
+	transcriptPrefix []Message
+	finalText        string
+	stopReason       RunStopReason
+	usage            Usage
 
 	turnAttempts int
 	toolCalls    int
 	turns        []TurnRecord
+	initialCount int
 
 	startedAt  time.Time
 	finishedAt time.Time
@@ -60,14 +66,17 @@ type RunResult struct {
 func resultFromState(state *runState, finalText string, reason RunStopReason) RunResult {
 	turns := append([]TurnRecord(nil), state.turns...)
 	return RunResult{
-		runID:        state.runID,
-		messages:     append([]Message(nil), state.messages...),
+		runID: state.runID,
+		// finish transfers ownership of the completed run state to the immutable
+		// result. No code mutates state.messages after resultFromState returns.
+		messages:     state.messages,
 		finalText:    finalText,
 		stopReason:   reason,
 		usage:        state.usage,
 		turnAttempts: state.turnAttempts,
 		toolCalls:    state.toolCalls,
 		turns:        turns,
+		initialCount: state.initialCount,
 		startedAt:    state.startedAt,
 		finishedAt:   state.finishedAt,
 	}
@@ -78,7 +87,23 @@ func (r RunResult) RunID() string { return r.runID }
 
 // Messages 返回 Transcript 顶层 Slice 的副本，避免调用者覆盖结果内部的消息顺序。
 func (r RunResult) Messages() []Message {
+	if r.transcriptPrefix != nil && r.initialCount >= 0 && r.initialCount <= len(r.messages) {
+		delta := r.messages[r.initialCount:]
+		messages := make([]Message, 0, len(r.transcriptPrefix)+len(delta))
+		messages = append(messages, r.transcriptPrefix...)
+		messages = append(messages, delta...)
+		return messages
+	}
 	return append([]Message(nil), r.messages...)
+}
+
+// WithTranscriptPrefix returns a result whose Messages method reconstructs the
+// complete logical transcript from an immutable prefix and this Run's newly
+// generated facts. Session adapters use it after running from a bounded context
+// projection. The prefix elements and order must not be modified afterwards.
+func (r RunResult) WithTranscriptPrefix(prefix []Message) RunResult {
+	r.transcriptPrefix = prefix
+	return r
 }
 
 // FinalText 返回适合直接展示给用户的最终文本。
@@ -97,6 +122,10 @@ func (r RunResult) TurnAttempts() int { return r.turnAttempts }
 // ToolCalls 返回 Runtime 已实际处理的 Tool Call 数。
 // 扩展在副作用边界之前整批停止的调用不会计入这个值。
 func (r RunResult) ToolCalls() int { return r.toolCalls }
+
+// InitialMessageCount returns the number of messages that formed this Run's
+// projected input. Session uses it to separate new facts from temporary context.
+func (r RunResult) InitialMessageCount() int { return r.initialCount }
 
 // StartedAt / FinishedAt 返回运行时间边界。
 func (r RunResult) StartedAt() time.Time  { return r.startedAt }
@@ -153,13 +182,16 @@ type runState struct {
 	turnAttempts int
 	toolCalls    int
 	turns        []TurnRecord
+	initialCount int
 }
 
 func newRunState(runID string, startedAt time.Time, messages []Message) *runState {
 	return &runState{
 		runID:     runID,
 		startedAt: startedAt,
-		messages:  append([]Message(nil), messages...),
+		// StartMessagesWithOptions created this slice solely for the run goroutine.
+		messages:     messages,
+		initialCount: len(messages),
 	}
 }
 
