@@ -3,7 +3,6 @@ package po
 import (
 	"context"
 	"fmt"
-	"reflect"
 )
 
 // AgentConfig 只包含可复用的核心机制。预算、重试、审批和超时等工作流策略应通过这些
@@ -18,14 +17,15 @@ type AgentConfig struct {
 	SystemPrompt    string
 	MaxOutputTokens int
 
-	// IDs 可以注入以便编写确定性测试；为 nil 时使用 AtomicIDGenerator。
-	IDs IDGenerator
-
 	// EmitModelDelta 是可选的底层流式增量观察器。
 	EmitModelDelta DeltaEmitter
 
 	// ToolExecution 决定一条 AssistantMessage 中多个 ToolCall 的执行方式，默认并行。
 	ToolExecution ToolExecutionMode
+
+	// ResourceResolver 根据 ToolCall 的实际参数推导批次内资源需求。为 nil 时保持
+	// 无资源约束的并行行为，适合纯函数 Tool 或由 Tool 自己处理并发的调用方。
+	ResourceResolver ResourceResolver
 
 	// SteeringMode 和 FollowUpMode 控制一次 Turn 边界最多消费多少条排队用户消息。
 	SteeringMode ControlQueueMode
@@ -43,10 +43,11 @@ type Agent struct {
 	validator       SchemaValidator
 	systemPrompt    string
 	maxOutputTokens int
-	ids             IDGenerator
+	ids             *AtomicIDGenerator
 	emitModelDelta  DeltaEmitter
 
-	toolExecution ToolExecutionMode
+	toolExecution    ToolExecutionMode
+	resourceResolver ResourceResolver
 
 	steeringMode ControlQueueMode
 	followUpMode ControlQueueMode
@@ -59,7 +60,7 @@ type Agent struct {
 }
 
 func NewAgent(config AgentConfig) (*Agent, error) {
-	if isNilInterface(config.Model) {
+	if config.Model == nil {
 		return nil, fmt.Errorf("invalid agent: model is required")
 	}
 	if err := config.Model.Info().Validate(); err != nil {
@@ -96,16 +97,11 @@ func NewAgent(config AgentConfig) (*Agent, error) {
 		return nil, fmt.Errorf("invalid agent follow-up mode: %w", err)
 	}
 
-	ids := config.IDs
-	if isNilInterface(ids) {
-		ids = NewAtomicIDGenerator()
-	}
-
 	tools := config.Tools
 	if tools == nil {
 		tools = NewToolRegistry()
 	}
-	if tools.Snapshot().Len() > 0 && isNilInterface(config.Validator) {
+	if tools.Len() > 0 && config.Validator == nil {
 		return nil, fmt.Errorf("invalid agent: validator is required when tools are registered")
 	}
 
@@ -115,31 +111,16 @@ func NewAgent(config AgentConfig) (*Agent, error) {
 		validator:           config.Validator,
 		systemPrompt:        config.SystemPrompt,
 		maxOutputTokens:     config.MaxOutputTokens,
-		ids:                 ids,
+		ids:                 NewAtomicIDGenerator(),
 		emitModelDelta:      config.EmitModelDelta,
 		toolExecution:       toolExecution,
+		resourceResolver:    config.ResourceResolver,
 		steeringMode:        steeringMode,
 		followUpMode:        followUpMode,
 		beforeToolCall:      config.BeforeToolCall,
 		afterToolCall:       config.AfterToolCall,
 		shouldStopAfterTurn: config.ShouldStopAfterTurn,
 	}, nil
-}
-
-// isNilInterface 还会识别内部包含有类型 nil 指针、映射、切片、函数或通道的接口值。
-// 公共接口边界在调用方法前使用它，避免有类型 nil 延迟触发 panic。
-func isNilInterface(value any) bool {
-	if value == nil {
-		return true
-	}
-
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }
 
 // Subscribe 注册一个同步的运行时事件观察器。

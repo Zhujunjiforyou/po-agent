@@ -87,20 +87,3 @@ func TestApprovalBackendFailureIsErrorNotNormalBlock(t *testing.T) {
 		t.Fatal("backend failure must not be disguised as user denial")
 	}
 }
-
-type nilApprover struct{}
-
-func (*nilApprover) Approve(context.Context, ApprovalRequest) (bool, error) { return true, nil }
-
-func TestApprovalTreatsTypedNilApproverAsUnavailable(t *testing.T) {
-	var typedNil *nilApprover
-	policy := NewApproval("approval", map[string]string{"git_push": "remote write"}, typedNil)
-
-	decision, err := policy.BeforeToolCall(context.Background(), po.BeforeToolCallContext{Call: po.ToolCall{Name: "git_push"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !decision.Block {
-		t.Fatal("typed nil approver must not authorize the operation")
-	}
-}

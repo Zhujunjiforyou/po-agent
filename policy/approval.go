@@ -59,13 +59,13 @@ func (p *Approval) BeforeToolCall(ctx context.Context, input po.BeforeToolCallCo
 
 	// 没有交互式 Approver 时：
 	// 需要批准的操作默认不执行。
-	if isNilPolicyValue(p.approver) {
+	if p.approver == nil {
 		return po.BeforeToolCallDecision{Block: true, Reason: "approval is required but no approver is available"}, nil
 	}
 	allowed, err := p.approver.Approve(ctx, ApprovalRequest{
 		ToolName: input.Call.Name,
 		Reason:   reason,
-		Call:     input.Call.Clone(),
+		Call:     input.Call,
 	})
 	if err != nil {
 		// Approver 本身失败不是“用户拒绝”。

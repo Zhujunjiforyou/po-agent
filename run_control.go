@@ -57,19 +57,11 @@ func newRunHandle(runID string, runCtx context.Context, cancel context.CancelCau
 
 // RunID 在 Run 尚未结束时也可用，便于 CLI / Trace 立即建立关联。
 func (h *RunHandle) RunID() string {
-	if h == nil {
-		return ""
-	}
 	return h.runID
 }
 
 // Done 在 Run 完成后关闭。调用方可以把它放进 select，而不必阻塞 Wait。
 func (h *RunHandle) Done() <-chan struct{} {
-	if h == nil {
-		closed := make(chan struct{})
-		close(closed)
-		return closed
-	}
 	return h.done
 }
 
@@ -77,10 +69,6 @@ func (h *RunHandle) Done() <-chan struct{} {
 //
 // Wait 可以被多个 goroutine 调用；result/err 会在 done 关闭前一次性写入。
 func (h *RunHandle) Wait() (RunResult, error) {
-	if h == nil {
-		return RunResult{}, fmt.Errorf("run handle is nil")
-	}
-
 	<-h.done
 
 	h.mu.Lock()
@@ -93,9 +81,6 @@ func (h *RunHandle) Wait() (RunResult, error) {
 // Steering 不会强行中断当前 Model Stream 或 Tool Execute。Po 和 Pi 一样，把它理解成
 // “在当前 Turn 完整结束后，优先在下一次模型调用前注入的新指令”。
 func (h *RunHandle) Steer(message UserMessage) error {
-	if h == nil {
-		return ErrRunClosed
-	}
 	if err := message.Validate(); err != nil {
 		return fmt.Errorf("steering message: %w", err)
 	}
@@ -110,9 +95,6 @@ func (h *RunHandle) Steer(message UserMessage) error {
 // Follow-up 不抢占当前工作。只有 Agent 本来准备自然结束，并且没有待处理 Steering 时，
 // Runtime 才会消费 Follow-up 并开启新的 Turn。
 func (h *RunHandle) FollowUp(message UserMessage) error {
-	if h == nil {
-		return ErrRunClosed
-	}
 	if err := message.Validate(); err != nil {
 		return fmt.Errorf("follow-up message: %w", err)
 	}
@@ -127,10 +109,6 @@ func (h *RunHandle) FollowUp(message UserMessage) error {
 // Abort 是幂等的。它和 Steering 的语义完全不同：Steering 等待安全 Turn 边界后改变方向；
 // Abort 则立即取消整棵 Context Tree，让 Model / Tool 尽快合作退出。
 func (h *RunHandle) Abort() {
-	if h == nil {
-		return
-	}
-
 	// 先关闭控制队列，确保 Abort 之后新的 Steering / Follow-up 不会被错误地接受。
 	h.control.close()
 	h.cancel(ErrRunAborted)
@@ -227,10 +205,6 @@ func (c *runControl) takeNextAtNaturalStop() (messages []UserMessage, closed boo
 }
 
 func (c *runControl) close() {
-	if c == nil {
-		return
-	}
-
 	c.mu.Lock()
 	c.active = false
 	c.steering = nil

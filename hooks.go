@@ -13,12 +13,6 @@ type RunSnapshot struct {
 	ToolCalls int
 }
 
-// Clone 返回独立的顶层快照。消息本身是不可变领域值，因此复制切片即可。
-func (s RunSnapshot) Clone() RunSnapshot {
-	s.Messages = append([]Message(nil), s.Messages...)
-	return s
-}
-
 // BeforeToolCallContext 描述调用 Tool.Execute 前已经校验的工具调用。
 type BeforeToolCallContext struct {
 	Run        RunSnapshot

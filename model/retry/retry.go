@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"reflect"
 	"time"
 
 	po "github.com/lemonzjj/po-agent-go"
@@ -69,13 +68,7 @@ func (p Policy) Delay(retryNumber int, retryAfter time.Duration) time.Duration {
 	return time.Duration(float64(delay) * (1 + jitter))
 }
 
-type Sleeper interface {
-	Sleep(context.Context, time.Duration) error
-}
-
-type TimerSleeper struct{}
-
-func (TimerSleeper) Sleep(ctx context.Context, delay time.Duration) error {
+func sleep(ctx context.Context, delay time.Duration) error {
 	if delay <= 0 {
 		return nil
 	}
@@ -96,26 +89,26 @@ func (TimerSleeper) Sleep(ctx context.Context, delay time.Duration) error {
 // 重试：部分输出对外可见后，除非界面具有明确的重置协议，否则静默开始第二次生成会破坏
 // 输出流。
 type Model struct {
-	base    po.Model
-	policy  Policy
-	sleeper Sleeper
+	base   po.Model
+	policy Policy
+	sleep  func(context.Context, time.Duration) error
 }
 
-func New(base po.Model, policy Policy, sleeper Sleeper) (*Model, error) {
-	if isNilModel(base) {
+func New(base po.Model, policy Policy, sleepFn func(context.Context, time.Duration) error) (*Model, error) {
+	if base == nil {
 		return nil, fmt.Errorf("retry model requires a base model")
 	}
 	if err := policy.Validate(); err != nil {
 		return nil, err
 	}
-	if isNilValue(sleeper) {
-		sleeper = TimerSleeper{}
+	if sleepFn == nil {
+		sleepFn = sleep
 	}
-	return &Model{base: base, policy: policy, sleeper: sleeper}, nil
+	return &Model{base: base, policy: policy, sleep: sleepFn}, nil
 }
 
-func MustNew(base po.Model, policy Policy, sleeper Sleeper) *Model {
-	model, err := New(base, policy, sleeper)
+func MustNew(base po.Model, policy Policy, sleepFn func(context.Context, time.Duration) error) *Model {
+	model, err := New(base, policy, sleepFn)
 	if err != nil {
 		panic(err)
 	}
@@ -153,7 +146,7 @@ func (m *Model) Generate(ctx context.Context, request po.ModelRequest, emit po.D
 		if !retryable || attempt == m.policy.MaxAttempts {
 			return po.ModelResponse{}, err
 		}
-		if err := m.sleeper.Sleep(ctx, m.policy.Delay(attempt, retryAfter)); err != nil {
+		if err := m.sleep(ctx, m.policy.Delay(attempt, retryAfter)); err != nil {
 			return po.ModelResponse{}, err
 		}
 	}
@@ -166,22 +159,6 @@ func metadata(err error) (bool, time.Duration) {
 		return providerErr.Retryable, providerErr.RetryAfter
 	}
 	return false, 0
-}
-
-func isNilModel(model po.Model) bool { return isNilValue(model) }
-
-func isNilValue(value any) bool {
-	if value == nil {
-		return true
-	}
-
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }
 
 var _ po.Model = (*Model)(nil)

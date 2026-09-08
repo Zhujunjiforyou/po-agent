@@ -4,7 +4,6 @@ package timeout
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"time"
 
 	po "github.com/lemonzjj/po-agent-go"
@@ -16,7 +15,7 @@ type Model struct {
 }
 
 func New(base po.Model, duration time.Duration) (*Model, error) {
-	if isNilModel(base) {
+	if base == nil {
 		return nil, fmt.Errorf("timeout model requires a base model")
 	}
 	if duration < 0 {
@@ -41,20 +40,6 @@ func (m *Model) Generate(ctx context.Context, request po.ModelRequest, emit po.D
 		return po.ModelResponse{}, cause
 	}
 	return response, err
-}
-
-func isNilModel(model po.Model) bool {
-	if model == nil {
-		return true
-	}
-
-	value := reflect.ValueOf(model)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 var _ po.Model = (*Model)(nil)

@@ -42,9 +42,6 @@ func (a *Agent) StartMessages(ctx context.Context, messages []Message) (*RunHand
 // StartMessages 从已有Transcript启动一个可控制Run，并立即返回RunHandle
 // 具体 Message 是 package po 的不可变值对象，因此不需要再做 JSON 往返。
 func (a *Agent) StartMessagesWithOptions(ctx context.Context, messages []Message, options RunOptions) (*RunHandle, error) {
-	if ctx == nil {
-		return nil, fmt.Errorf("run context must not be nil")
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -98,7 +95,7 @@ func validateRunMessages(messages []Message) error {
 func (a *Agent) runControlled(runCtx context.Context, runID string, initialMessages []Message,
 	control *runControl, options RunOptions) (RunResult, error) {
 	state := newRunState(runID, time.Now(), initialMessages)
-	tools := a.tools.Snapshot()
+	tools := a.tools
 	a.emit(runCtx, RunStartEvent{RunID: runID})
 
 	finish := func(finalText string, reason RunStopReason, runErr error) (RunResult, error) {
@@ -367,6 +364,7 @@ type preparedToolCall struct {
 	call       ToolCall
 	tool       Tool
 	spec       ToolSpec
+	claims     []ResourceClaim
 }
 
 // completedToolCall 是worker goroutine发回协调器的完成信号
@@ -377,7 +375,7 @@ type completedToolCall struct {
 }
 
 // executeToolCalls 是tool batch唯一的入口
-func (a *Agent) executeToolCalls(ctx context.Context, run RunSnapshot, tools ToolSnapshot,
+func (a *Agent) executeToolCalls(ctx context.Context, run RunSnapshot, tools *ToolRegistry,
 	calls []ToolCall) ([]toolCallOutcome, RunStopReason, error) {
 	if a.toolExecution == ToolExecutionSequential {
 		return a.executeToolCallsSequential(ctx, run, tools, calls)
@@ -385,7 +383,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, run RunSnapshot, tools Too
 	return a.executeToolCallsParallel(ctx, run, tools, calls)
 }
 
-func (a *Agent) executeToolCallsSequential(ctx context.Context, run RunSnapshot, tools ToolSnapshot,
+func (a *Agent) executeToolCallsSequential(ctx context.Context, run RunSnapshot, tools *ToolRegistry,
 	calls []ToolCall) ([]toolCallOutcome, RunStopReason, error) {
 	outcomes := make([]toolCallOutcome, 0, len(calls))
 	for index, call := range calls {
@@ -424,17 +422,16 @@ func (a *Agent) executeToolCallsSequential(ctx context.Context, run RunSnapshot,
 // executeToolCallsParallel 实现默认的批次语义：
 //
 //  1. 所有 ToolCall 先按 source order 顺序 preflight；
-//  2. 如果没有 Run-stopping Hook，允许执行的 Tool 全部进入 runnable 集合；
-//  3. ToolStartEvent 仍按 source order 发出；
-//  4. 真正 Execute 并发发生；ToolEndEvent 因而按真实完成顺序出现；
+//  2. 允许执行的 Tool 按 source order 加入各自的资源 FIFO；
+//  3. 只有同时获得全部资源的 Tool 才产生 ToolStartEvent 并进入 Execute；
+//  4. 不冲突的 Execute 并发发生；ToolEndEvent 因而按真实完成顺序出现；
 //  5. 最终 outcomes 按 batchIndex 回填，Transcript 仍保持 source order。
 //
-// 这和“给旧 for 循环简单加 go”有本质区别：副作用前的 Policy/Guard 仍然具有
-// 可推理的确定顺序，而 UI 又能看到真实完成时间。
+// 副作用前的 Policy/Guard 保持确定顺序；等待资源的调用不会提前显示为已开始。
 func (a *Agent) executeToolCallsParallel(
 	ctx context.Context,
 	run RunSnapshot,
-	tools ToolSnapshot,
+	tools *ToolRegistry,
 	calls []ToolCall,
 ) ([]toolCallOutcome, RunStopReason, error) {
 	outcomes := make([]toolCallOutcome, len(calls))
@@ -484,29 +481,36 @@ func (a *Agent) executeToolCallsParallel(
 		return outcomes, "", nil
 	}
 
-	// ToolStart 由协调器按 source order 发出，而不是让 worker goroutine 自己 emit。
-	// 否则仅仅因为 goroutine 调度不同，CLI 看到的“开始顺序”也会变成不确定。
-	for _, item := range prepared {
-		a.emitToolStart(ctx, run, item)
-	}
+	scheduler := newToolBatchScheduler(prepared)
 
-	// 所有 worker 共享一个 batch Context。第一个 Runtime 级 fatal error 出现后，
-	// coordinator 会 cancelBatch(err)，让仍在执行的兄弟 Tool 有机会尽快退出。
-	// 普通 Tool 业务 error 已经在 executeStartedToolCall 中转成 ToolResult，不会走这里。
+	// 所有 worker 共享一个 batch Context。Scheduler 只为已经获得全部资源的调用
+	// 创建 worker；第一个 Runtime 级 fatal error 会取消正在运行的兄弟 Tool，并且
+	// 不再启动仍在资源队列中等待的调用。
 	batchCtx, cancelBatch := context.WithCancelCause(ctx)
 	defer cancelBatch(nil)
 
 	completions := make(chan completedToolCall, len(prepared))
-	for _, item := range prepared {
-		go func(item preparedToolCall) {
-			outcome, err := a.executeStartedToolCall(batchCtx, run, item)
-			completions <- completedToolCall{index: item.batchIndex, outcome: outcome, err: err}
-		}(item)
+	startRunnable := func() {
+		for context.Cause(batchCtx) == nil {
+			item, ok := scheduler.startNext()
+			if !ok {
+				return
+			}
+			// ToolStart 表示调用已经获得全部逻辑资源，即将进入 Execute，而不是仅仅
+			// 完成了参数预检或正在等待某一把锁。
+			a.emitToolStart(batchCtx, run, item)
+			go func(item preparedToolCall) {
+				outcome, err := a.executeStartedToolCall(batchCtx, run, item)
+				completions <- completedToolCall{index: item.batchIndex, outcome: outcome, err: err}
+			}(item)
+		}
 	}
 
 	var firstErr error
-	for range len(prepared) {
+	startRunnable()
+	for scheduler.runningCount() > 0 {
 		completed := <-completions
+		scheduler.complete(completed.index)
 		if completed.err != nil {
 			// 只让第一个 fatal error 成为 Run 的主错误。后续兄弟 Tool 很可能只是因为
 			// batch Context 已被取消而返回同一个 Cause；覆盖 firstErr 会丢掉根因。
@@ -514,13 +518,25 @@ func (a *Agent) executeToolCallsParallel(
 				firstErr = completed.err
 				cancelBatch(completed.err)
 			}
-			continue
+		} else {
+			outcomes[completed.index] = completed.outcome
 		}
-		outcomes[completed.index] = completed.outcome
+
+		if firstErr == nil {
+			if cause := context.Cause(batchCtx); cause != nil {
+				firstErr = cause
+				cancelBatch(cause)
+			} else {
+				startRunnable()
+			}
+		}
 	}
 
 	if firstErr != nil {
 		return nil, "", firstErr
+	}
+	if cause := context.Cause(batchCtx); cause != nil {
+		return nil, "", cause
 	}
 	return outcomes, "", nil
 }
@@ -531,7 +547,7 @@ func (a *Agent) prepareToolCall(
 	ctx context.Context,
 	run RunSnapshot,
 	batchIndex, batchSize int,
-	tools ToolSnapshot,
+	tools *ToolRegistry,
 	call ToolCall,
 ) (*preparedToolCall, *toolCallOutcome, error) {
 	if cause := context.Cause(ctx); cause != nil {
@@ -550,13 +566,30 @@ func (a *Agent) prepareToolCall(
 		return nil, &outcome, buildErr
 	}
 
+	var claims []ResourceClaim
+	// 串行模式没有资源准入过程，不调用 Resolver，保持原有执行语义。
+	if a.toolExecution == ToolExecutionParallel && a.resourceResolver != nil {
+		resolved, err := a.resourceResolver(call.Clone())
+		if err != nil {
+			if errors.Is(err, ErrInvalidToolArguments) {
+				outcome, buildErr := a.errorToolOutcome(call, err.Error(), "", true)
+				return nil, &outcome, buildErr
+			}
+			return nil, nil, fmt.Errorf("resolve resources for tool %q: %w", call.Name, err)
+		}
+		claims, err = normalizeResourceClaims(resolved)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve resources for tool %q: %w", call.Name, err)
+		}
+	}
+
 	if a.beforeToolCall != nil {
 		decision, err := a.beforeToolCall(ctx, BeforeToolCallContext{
-			Run:        run.Clone(),
+			Run:        run,
 			BatchIndex: batchIndex,
 			BatchSize:  batchSize,
 			Call:       call.Clone(),
-			Spec:       spec.Clone(),
+			Spec:       spec,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("before tool call: %w", err)
@@ -581,9 +614,10 @@ func (a *Agent) prepareToolCall(
 	return &preparedToolCall{
 		batchIndex: batchIndex,
 		batchSize:  batchSize,
-		call:       call.Clone(),
+		call:       call,
 		tool:       tool,
-		spec:       spec.Clone(),
+		spec:       spec,
+		claims:     claims,
 	}, nil, nil
 }
 
@@ -610,7 +644,7 @@ func (a *Agent) executeStartedToolCall(ctx context.Context, run RunSnapshot, pre
 			TurnID:     run.TurnID,
 			ToolCallID: call.ID,
 			ToolName:   call.Name,
-			Result:     result.Clone(),
+			Result:     result,
 			IsError:    isError,
 			Err:        eventErr,
 		})
@@ -624,7 +658,7 @@ func (a *Agent) executeStartedToolCall(ctx context.Context, run RunSnapshot, pre
 			TurnID:     run.TurnID,
 			ToolCallID: call.ID,
 			ToolName:   call.Name,
-			Update:     update.Clone(),
+			Update:     update,
 		})
 		return nil
 	})
@@ -663,12 +697,12 @@ func (a *Agent) executeStartedToolCall(ctx context.Context, run RunSnapshot, pre
 
 	if a.afterToolCall != nil {
 		nextResult, nextIsError, err := a.afterToolCall(ctx, AfterToolCallContext{
-			Run:        run.Clone(),
+			Run:        run,
 			BatchIndex: prepared.batchIndex,
 			BatchSize:  prepared.batchSize,
 			Call:       call.Clone(),
-			Spec:       prepared.spec.Clone(),
-			Result:     result.Clone(),
+			Spec:       prepared.spec,
+			Result:     result,
 			IsError:    isError,
 		})
 		if err != nil {

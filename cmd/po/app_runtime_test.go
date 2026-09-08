@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	po "github.com/lemonzjj/po-agent-go"
 	"github.com/lemonzjj/po-agent-go/internal/appconfig"
 )
 
@@ -14,6 +15,24 @@ func TestRiskyToolReasonsCoverEveryProcessAndMutationTool(t *testing.T) {
 		if reasons[name] == "" {
 			t.Errorf("tool %q has no approval reason", name)
 		}
+	}
+}
+
+func TestAppResourceClaimsLeavesCalculatorUnconstrained(t *testing.T) {
+	call, err := po.NewToolCall("call-1", "calculator", map[string]any{
+		"operation": "add",
+		"a":         1,
+		"b":         2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := appResourceClaims(call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 0 {
+		t.Fatalf("calculator claims = %#v, want none", claims)
 	}
 }
 

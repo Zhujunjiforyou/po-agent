@@ -53,7 +53,7 @@ type invalidResultTool struct {
 	spec po.ToolSpec
 }
 
-func (t *invalidResultTool) Spec() po.ToolSpec { return t.spec.Clone() }
+func (t *invalidResultTool) Spec() po.ToolSpec { return t.spec }
 
 func (t *invalidResultTool) Execute(context.Context, po.ToolCall, po.ToolUpdateEmitter) (po.ToolResult, error) {
 	return po.ToolResult{}, nil
@@ -96,7 +96,7 @@ type cancellationTool struct {
 	cause error
 }
 
-func (t *cancellationTool) Spec() po.ToolSpec { return t.spec.Clone() }
+func (t *cancellationTool) Spec() po.ToolSpec { return t.spec }
 
 func (t *cancellationTool) Execute(ctx context.Context, _ po.ToolCall, _ po.ToolUpdateEmitter) (po.ToolResult, error) {
 	t.cause = context.Cause(ctx)

@@ -390,7 +390,7 @@ func (m AssistantMessage) ToolCalls() []ToolCall {
 		if part.Type != ContentToolCall || part.ToolCall == nil {
 			continue
 		}
-		calls = append(calls, part.ToolCall.Clone())
+		calls = append(calls, *part.ToolCall)
 	}
 	return calls
 }

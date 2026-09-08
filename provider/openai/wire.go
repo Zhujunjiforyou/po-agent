@@ -145,7 +145,7 @@ func encodeMessages(systemPrompt string, messages []po.Message) ([]chatMessage, 
 					if part.ToolCall == nil {
 						return nil, fmt.Errorf("encode assistant message %d: nil tool call", index)
 					}
-					call := part.ToolCall.Clone()
+					call := *part.ToolCall
 					encoded.ToolCalls = append(encoded.ToolCalls, chatToolCall{
 						ID:   call.ID,
 						Type: "function",

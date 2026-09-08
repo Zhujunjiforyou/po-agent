@@ -78,14 +78,6 @@ func TestHistoryBranchPreservesAbandonedPath(t *testing.T) {
 	}
 }
 
-func TestNilHistoryPrepareAppendReturnsError(t *testing.T) {
-	var history *History
-	_, err := history.PrepareAppend(mustUser(t, "u1"), time.Now().UTC())
-	if !errors.Is(err, ErrInvalidSession) {
-		t.Fatalf("PrepareAppend() error = %v, want ErrInvalidSession", err)
-	}
-}
-
 type failingRunJournal struct {
 	appendCalls int
 	pending     *PendingRun

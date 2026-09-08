@@ -182,16 +182,10 @@ func Open(path string) (*File, session.State, error) {
 	state := session.State{
 		ID:        parsed.header.SessionID,
 		CreatedAt: parsed.header.CreatedAt,
+		Messages:  parsed.messages,
 		Entries:   parsed.entries,
 		LeafID:    parsed.leafID,
 		Pending:   parsed.pending,
-	}
-	if history, historyErr := session.RestoreHistory(state.Entries, state.LeafID); historyErr == nil {
-		state.Messages, _ = history.Messages()
-	}
-	if err := state.Validate(); err != nil {
-		_ = file.Close()
-		return nil, session.State{}, fmt.Errorf("invalid restored session state: %w", err)
 	}
 	return journal, state, nil
 }
@@ -474,6 +468,7 @@ type parsedFile struct {
 	header               headerRecord
 	version              int
 	entries              []session.Entry
+	messages             []po.Message
 	leafID               string
 	pending              *session.PendingRun
 	nextSeq              uint64
@@ -605,10 +600,13 @@ func parseFile(data []byte) (parsedFile, error) {
 	if err != nil {
 		return parsedFile{}, fmt.Errorf("%w: rebuild tree: %v", ErrInvalidFile, err)
 	}
-	_ = history
+	messages, err := history.Messages()
+	if err != nil {
+		return parsedFile{}, fmt.Errorf("%w: rebuild active branch: %v", ErrInvalidFile, err)
+	}
 
 	return parsedFile{
-		header: header, version: version, entries: entries, leafID: leafID, pending: pending,
+		header: header, version: version, entries: entries, messages: messages, leafID: leafID, pending: pending,
 		nextSeq: maxSeq + 1, validBytes: validBytes,
 		needsTrailingNewline: len(data) > 0 && validBytes == int64(len(data)) && !trailingNewline,
 	}, nil

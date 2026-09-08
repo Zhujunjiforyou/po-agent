@@ -144,9 +144,6 @@ func (m *Model) Info() po.ModelInfo { return m.info }
 // 如果能力画像声明支持 Streaming，即使 emit == nil 也继续走 SSE。这样“是否展示
 // 流式 UI”和“Provider 如何生成最终响应”不会变成两套语义不同的实现。
 func (m *Model) Generate(ctx context.Context, request po.ModelRequest, emit po.DeltaEmitter) (po.ModelResponse, error) {
-	if ctx == nil {
-		return po.ModelResponse{}, fmt.Errorf("openai-compatible context must not be nil")
-	}
 	if err := request.ValidateFor(m.info); err != nil {
 		return po.ModelResponse{}, err
 	}

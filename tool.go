@@ -47,8 +47,7 @@ func NewToolCall(id, name string, args any) (ToolCall, error) {
 		return ToolCall{}, err
 	}
 
-	// 返回 Clone，确保 ToolCall 拥有独立的参数字节。
-	return call.Clone(), nil
+	return call, nil
 }
 
 // Validate 只检查协议层不变量，不检查具体工具的参数语义。
@@ -128,7 +127,7 @@ func NewToolResult(content []ContentPart, details any, terminate bool) (ToolResu
 	if err := result.Validate(); err != nil {
 		return ToolResult{}, err
 	}
-	return result.Clone(), nil
+	return result, nil
 }
 
 // NewTextToolResult 是大多数文本工具的便利构造函数。
@@ -157,15 +156,6 @@ func (r ToolResult) Details() json.RawMessage {
 // 真正的批次终止规则由 Agent Loop 决定。
 func (r ToolResult) Terminate() bool {
 	return r.terminate
-}
-
-// Clone 返回完整深拷贝，适合保存到事件或操作记录中。
-func (r ToolResult) Clone() ToolResult {
-	return ToolResult{
-		content:   cloneParts(r.content),
-		details:   bytes.Clone(r.details),
-		terminate: r.terminate,
-	}
 }
 
 // Validate 检查 ToolResult 自身的协议不变量。
@@ -323,7 +313,8 @@ func EmitToolUpdate(ctx context.Context, emit ToolUpdateEmitter, update ToolUpda
 type ToolExecutionMode string
 
 const (
-	// ToolExecutionParallel 是默认模式，所有ToolCall先按模型原始顺序完成Lookup、schema和BeforeToolCall
+	// ToolExecutionParallel 是默认模式。所有 ToolCall 先按模型顺序完成
+	// Lookup、Schema 和 BeforeToolCall，再由资源 FIFO 调度互不冲突的调用。
 	ToolExecutionParallel   ToolExecutionMode = "parallel"
 	ToolExecutionSequential ToolExecutionMode = "sequential"
 )

@@ -4,7 +4,6 @@ package policy
 import (
 	"context"
 	"fmt"
-	"reflect"
 
 	po "github.com/lemonzjj/po-agent-go"
 )
@@ -29,30 +28,11 @@ type Pipeline struct {
 	policies []ToolPolicy
 }
 
-func New(policies ...ToolPolicy) (*Pipeline, error) {
-	copied := make([]ToolPolicy, 0, len(policies))
-	seen := make(map[string]struct{}, len(policies))
-	for i, current := range policies {
-		if isNilPolicyValue(current) {
-			return nil, fmt.Errorf("policy %d is nil", i)
-		}
-		name := current.Name()
-		if name == "" {
-			return nil, fmt.Errorf("policy %d has empty name", i)
-		}
-		if _, exists := seen[name]; exists {
-			return nil, fmt.Errorf("duplicate policy %q", name)
-		}
-		seen[name] = struct{}{}
-		copied = append(copied, current)
-	}
-	return &Pipeline{policies: copied}, nil
+func New(policies ...ToolPolicy) *Pipeline {
+	return &Pipeline{policies: append([]ToolPolicy(nil), policies...)}
 }
 
 func (p *Pipeline) BeforeToolCall(ctx context.Context, input po.BeforeToolCallContext) (po.BeforeToolCallDecision, error) {
-	if p == nil {
-		return po.BeforeToolCallDecision{}, nil
-	}
 	for _, current := range p.policies {
 		before, ok := current.(BeforeToolPolicy)
 		if !ok {
@@ -73,11 +53,7 @@ func (p *Pipeline) BeforeToolCall(ctx context.Context, input po.BeforeToolCallCo
 }
 
 func (p *Pipeline) AfterToolCall(ctx context.Context, input po.AfterToolCallContext) (po.ToolResult, bool, error) {
-	if p == nil {
-		return input.Result.Clone(), input.IsError, nil
-	}
-
-	result := input.Result.Clone()
+	result := input.Result
 	isError := input.IsError
 	for _, current := range p.policies {
 		after, ok := current.(AfterToolPolicy)
@@ -85,36 +61,18 @@ func (p *Pipeline) AfterToolCall(ctx context.Context, input po.AfterToolCallCont
 			continue
 		}
 		next, nextIsError, err := after.AfterToolCall(ctx, po.AfterToolCallContext{
-			Run:        input.Run.Clone(),
+			Run:        input.Run,
 			BatchIndex: input.BatchIndex,
 			BatchSize:  input.BatchSize,
-			Call:       input.Call.Clone(),
-			Spec:       input.Spec.Clone(),
-			Result:     result.Clone(),
+			Call:       input.Call,
+			Spec:       input.Spec,
+			Result:     result,
 			IsError:    isError,
 		})
 		if err != nil {
 			return po.ToolResult{}, false, fmt.Errorf("policy %s after tool call: %w", current.Name(), err)
 		}
-		if err := next.Validate(); err != nil {
-			return po.ToolResult{}, false, fmt.Errorf("policy %s returned invalid tool result: %w", current.Name(), err)
-		}
-		result, isError = next.Clone(), nextIsError
+		result, isError = next, nextIsError
 	}
 	return result, isError, nil
-}
-
-// isNilPolicyValue 在扩展边界拒绝包含有类型 nil 的接口值。
-func isNilPolicyValue(value any) bool {
-	if value == nil {
-		return true
-	}
-
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }

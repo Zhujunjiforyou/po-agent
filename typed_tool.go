@@ -33,7 +33,7 @@ func NewTypedTool[T any](spec ToolSpec, check ToolArgumentsCheck[T], handler Too
 		return nil, fmt.Errorf("%w: handler is required", ErrInvalidTool)
 	}
 	return &TypedTool[T]{
-		spec:    spec.Clone(),
+		spec:    spec,
 		check:   check,
 		handler: handler,
 	}, nil
@@ -49,19 +49,12 @@ func MustNewTypedTool[T any](spec ToolSpec, check ToolArgumentsCheck[T], handler
 	return tool
 }
 
-// Spec 返回工具说明的深拷贝。
 func (t *TypedTool[T]) Spec() ToolSpec {
-	if t == nil {
-		return ToolSpec{}
-	}
-	return t.spec.Clone()
+	return t.spec
 }
 
 // Execute 实现Tool接口，并集中完成名称校验，JSON解码，业务校验和结果校验
 func (t *TypedTool[T]) Execute(ctx context.Context, call ToolCall, emit ToolUpdateEmitter) (ToolResult, error) {
-	if t == nil {
-		return ToolResult{}, fmt.Errorf("%w: typed tool is nil", ErrInvalidTool)
-	}
 	if err := ctx.Err(); err != nil {
 		return ToolResult{}, err
 	}
@@ -93,7 +86,7 @@ func (t *TypedTool[T]) Execute(ctx context.Context, call ToolCall, emit ToolUpda
 	if err := result.Validate(); err != nil {
 		return ToolResult{}, fmt.Errorf("%w: tool %s returned invalid result: %v", ErrToolExecution, t.spec.Name(), err)
 	}
-	return result.Clone(), nil
+	return result, nil
 }
 
 // decodeToolArguments 把原始 JSON 对象解码成工具自己的 Go 参数类型。

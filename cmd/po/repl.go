@@ -266,7 +266,7 @@ func readConsoleInput(console replConsole) <-chan consoleInput {
 
 func handleActiveInput(
 	active *session.Run,
-	ids po.IDGenerator,
+	ids *po.AtomicIDGenerator,
 	text string,
 	mode consoleInputMode,
 	console replConsole,

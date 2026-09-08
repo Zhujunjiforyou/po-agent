@@ -16,11 +16,6 @@ type Entry struct {
 	Message   po.Message
 }
 
-// Clone 返回节点副本。
-func (e Entry) Clone() Entry {
-	return e
-}
-
 // Validate 检查节点及其消息是否完整。
 func (e Entry) Validate() error {
 	if e.ID == "" {
@@ -74,7 +69,10 @@ func RestoreHistory(entries []Entry, leafID string) (*History, error) {
 func LinearHistory(messages []po.Message, now time.Time) (*History, error) {
 	history := NewHistory()
 	parentID := ""
-	for _, message := range messages {
+	for index, message := range messages {
+		if message == nil {
+			return nil, fmt.Errorf("%w: message %d is nil", ErrInvalidSession, index)
+		}
 		entry := Entry{ID: message.MessageID(), ParentID: parentID, Timestamp: now, Message: message}
 		if err := history.AppendEntry(entry); err != nil {
 			return nil, err
@@ -86,34 +84,22 @@ func LinearHistory(messages []po.Message, now time.Time) (*History, error) {
 
 // Entries 返回全部节点的切片副本。
 func (h *History) Entries() []Entry {
-	if h == nil {
-		return nil
-	}
 	return append([]Entry(nil), h.entries...)
 }
 
 // LeafID 返回当前活动叶节点的 ID。
 func (h *History) LeafID() string {
-	if h == nil {
-		return ""
-	}
 	return h.leafID
 }
 
 // Has 判断消息树中是否存在指定节点。
 func (h *History) Has(id string) bool {
-	if h == nil || id == "" {
-		return false
-	}
 	_, ok := h.byID[id]
 	return ok
 }
 
 // PrepareAppend 根据当前叶节点准备一条待提交记录，但不修改消息树。
 func (h *History) PrepareAppend(message po.Message, at time.Time) (Entry, error) {
-	if h == nil {
-		return Entry{}, fmt.Errorf("%w: history is nil", ErrInvalidSession)
-	}
 	if message == nil {
 		return Entry{}, fmt.Errorf("%w: cannot append nil message", ErrInvalidSession)
 	}
@@ -129,9 +115,6 @@ func (h *History) PrepareAppend(message po.Message, at time.Time) (Entry, error)
 
 // AppendEntry 提交一个已经确定 parent 的树节点。
 func (h *History) AppendEntry(entry Entry) error {
-	if h == nil {
-		return fmt.Errorf("%w: history is nil", ErrInvalidSession)
-	}
 	if err := entry.Validate(); err != nil {
 		return err
 	}
@@ -150,9 +133,6 @@ func (h *History) AppendEntry(entry Entry) error {
 
 // SetLeaf 切换活动分支。历史节点不会被删除。
 func (h *History) SetLeaf(id string) error {
-	if h == nil {
-		return fmt.Errorf("%w: history is nil", ErrInvalidSession)
-	}
 	if id == "" {
 		h.leafID = ""
 		return nil
@@ -166,7 +146,7 @@ func (h *History) SetLeaf(id string) error {
 
 // Path 返回从根节点到叶节点的稳定活动分支。
 func (h *History) Path() ([]Entry, error) {
-	if h == nil || h.leafID == "" {
+	if h.leafID == "" {
 		return nil, nil
 	}
 

@@ -84,10 +84,7 @@ func buildAppRuntime(config appconfig.Runtime, apiKey string, opts runtimeOption
 	})
 
 	approval := policy.NewApproval("interactive-approval", riskyToolReasons(), opts.Approver)
-	pipeline, err := policy.New(approval)
-	if err != nil {
-		return fail(err)
-	}
+	pipeline := policy.New(approval)
 
 	runtime := &appRuntime{
 		Workspace:      ws,
@@ -138,19 +135,27 @@ func (r *appRuntime) prepareAgent(config appconfig.Runtime, apiKey string) (*po.
 		tools = po.NewToolRegistry()
 	}
 	agent, err := po.NewAgent(po.AgentConfig{
-		Model:           model,
-		Tools:           tools,
-		Validator:       basic.New(),
-		SystemPrompt:    r.systemPrompt,
-		MaxOutputTokens: config.MaxOutputTokens,
-		BeforeToolCall:  r.beforeToolCall,
-		AfterToolCall:   r.afterToolCall,
-		EmitModelDelta:  r.emitDelta,
+		Model:            model,
+		Tools:            tools,
+		Validator:        basic.New(),
+		SystemPrompt:     r.systemPrompt,
+		MaxOutputTokens:  config.MaxOutputTokens,
+		ResourceResolver: appResourceClaims,
+		BeforeToolCall:   r.beforeToolCall,
+		AfterToolCall:    r.afterToolCall,
+		EmitModelDelta:   r.emitDelta,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return agent, nil
+}
+
+func appResourceClaims(call po.ToolCall) ([]po.ResourceClaim, error) {
+	if call.Name == "calculator" {
+		return nil, nil
+	}
+	return coding.ResolveResources(call)
 }
 
 func riskyToolReasons() map[string]string {

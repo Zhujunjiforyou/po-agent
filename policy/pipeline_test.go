@@ -39,13 +39,10 @@ func (p *afterPolicy) AfterToolCall(ctx context.Context, input po.AfterToolCallC
 
 func TestPipelineBeforeOrderAndShortCircuit(t *testing.T) {
 	var order []string
-	pipeline, err := New(
+	pipeline := New(
 		&beforePolicy{name: "first", order: &order, block: true, reason: "denied"},
 		&beforePolicy{name: "second", order: &order},
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	decision, err := pipeline.BeforeToolCall(context.Background(), po.BeforeToolCallContext{})
 	if err != nil {
 		t.Fatal(err)
@@ -60,11 +57,8 @@ func TestPipelineBeforeOrderAndShortCircuit(t *testing.T) {
 
 func TestPipelinePolicyErrorIsNotAllow(t *testing.T) {
 	want := errors.New("backend unavailable")
-	pipeline, err := New(&beforePolicy{name: "broken", err: want})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = pipeline.BeforeToolCall(context.Background(), po.BeforeToolCallContext{})
+	pipeline := New(&beforePolicy{name: "broken", err: want})
+	_, err := pipeline.BeforeToolCall(context.Background(), po.BeforeToolCallContext{})
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v", err)
 	}
@@ -75,40 +69,15 @@ func TestPipelineAfterChainsResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pipeline, err := New(
+	pipeline := New(
 		&afterPolicy{name: "a", from: "foo", to: "bar"},
 		&afterPolicy{name: "b", from: "bar", to: "baz"},
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	result, _, err := pipeline.AfterToolCall(context.Background(), po.AfterToolCallContext{Result: start})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := result.Content()[0].Text; got != "baz" {
 		t.Fatalf("text = %q", got)
-	}
-}
-
-func TestNewRejectsDuplicateName(t *testing.T) {
-	_, err := New(&beforePolicy{name: "same"}, &beforePolicy{name: "same"})
-	if err == nil {
-		t.Fatal("expected duplicate name error")
-	}
-}
-
-type nilBeforePolicy struct{}
-
-func (*nilBeforePolicy) Name() string { return "nil-policy" }
-func (*nilBeforePolicy) BeforeToolCall(context.Context, po.BeforeToolCallContext) (po.BeforeToolCallDecision, error) {
-	return po.BeforeToolCallDecision{}, nil
-}
-
-func TestPipelineRejectsTypedNilPolicy(t *testing.T) {
-	var typedNil *nilBeforePolicy
-	var asPolicy ToolPolicy = typedNil
-	if _, err := New(asPolicy); err == nil {
-		t.Fatal("expected typed nil policy to be rejected")
 	}
 }

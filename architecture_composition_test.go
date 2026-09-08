@@ -40,10 +40,7 @@ func TestOptionalExtensionsComposeAroundCore(t *testing.T) {
 	}
 
 	controller := guard.MustNew(guard.Budget{MaxTurns: 8, MaxToolCalls: 8})
-	pipeline, err := policy.New(controller)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pipeline := policy.New(controller)
 
 	agent, err := po.NewAgent(po.AgentConfig{
 		Model:               retryingModel,

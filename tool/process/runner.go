@@ -50,9 +50,6 @@ func NewRunner() *Runner { return &Runner{MaxOutputBytes: DefaultMaxOutputBytes}
 
 // Run 启动一个进程，并保证 Context 取消时终止整个由它创建的进程组。
 func (r *Runner) Run(ctx context.Context, spec Spec, update UpdateFunc) (Result, error) {
-	if ctx == nil {
-		return Result{}, fmt.Errorf("process context is required")
-	}
 	if strings.TrimSpace(spec.Name) == "" {
 		return Result{}, fmt.Errorf("process name is required")
 	}

@@ -39,9 +39,6 @@ type Client struct {
 
 // List 返回按 ID 排序并去重后的模型列表。
 func (c Client) List(ctx context.Context, source Source) ([]Model, error) {
-	if ctx == nil {
-		return nil, fmt.Errorf("model discovery context is required")
-	}
 	client := c.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}

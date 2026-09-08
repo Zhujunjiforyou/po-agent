@@ -12,25 +12,10 @@ type ContextBuildInput struct {
 	MaxOutputTokens int
 }
 
-// Clone 返回独立的切片快照，避免 Builder 意外修改 Agent 当前 Run 的输入。
-func (i ContextBuildInput) Clone() ContextBuildInput {
-	return ContextBuildInput{
-		SystemPrompt:    i.SystemPrompt,
-		Messages:        append([]Message(nil), i.Messages...),
-		Tools:           cloneToolSpecs(i.Tools),
-		Model:           i.Model,
-		MaxOutputTokens: i.MaxOutputTokens,
-	}
-}
-
 // ContextBuildResult 是当前这一次 Model Request 真正要看到的消息视图。
 // 它不是新的 Transcript。这里返回的临时 Summary / Projection 不会自动进入 Session。
 type ContextBuildResult struct {
 	Messages []Message
-}
-
-func (r ContextBuildResult) Clone() ContextBuildResult {
-	return ContextBuildResult{Messages: append([]Message(nil), r.Messages...)}
 }
 
 // ContextBuilder 是 Agent Core 暴露的最小 Context Engineering 扩展点。

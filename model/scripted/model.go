@@ -101,8 +101,7 @@ func (m *Model) Generate(ctx context.Context, request po.ModelRequest, emit po.D
 	step := m.steps[0]
 	m.steps = m.steps[1:]
 
-	// 保存 Clone，防止后续测试代码复用变量时改变历史断言数据。
-	m.requests = append(m.requests, request.Clone())
+	m.requests = append(m.requests, request)
 	m.mu.Unlock()
 
 	// 无论检查、Emitter 还是 Step 返回错误，都要清除 inFlight。
@@ -113,7 +112,7 @@ func (m *Model) Generate(ctx context.Context, request po.ModelRequest, emit po.D
 	}()
 
 	if step.check != nil {
-		if err := step.check(request.Clone()); err != nil {
+		if err := step.check(request); err != nil {
 			return po.ModelResponse{}, fmt.Errorf("scripted request check failed: %w", err)
 		}
 	}
@@ -132,16 +131,10 @@ func (m *Model) Generate(ctx context.Context, request po.ModelRequest, emit po.D
 	return *step.response, nil
 }
 
-// Requests 返回所有已收到请求的深层安全快照。
 func (m *Model) Requests() []po.ModelRequest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	requests := make([]po.ModelRequest, len(m.requests))
-	for i, request := range m.requests {
-		requests[i] = request.Clone()
-	}
-	return requests
+	return append([]po.ModelRequest(nil), m.requests...)
 }
 
 // RemainingSteps 返回尚未消费的脚本步数。

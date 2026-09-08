@@ -4,7 +4,6 @@ package timeout
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"time"
 
 	po "github.com/lemonzjj/po-agent-go"
@@ -16,7 +15,7 @@ type Tool struct {
 }
 
 func New(base po.Tool, duration time.Duration) (*Tool, error) {
-	if isNilTool(base) {
+	if base == nil {
 		return nil, fmt.Errorf("timeout tool requires a base tool")
 	}
 	if duration < 0 {
@@ -41,20 +40,6 @@ func (t *Tool) Execute(ctx context.Context, call po.ToolCall, emit po.ToolUpdate
 		return po.ToolResult{}, cause
 	}
 	return result, err
-}
-
-func isNilTool(tool po.Tool) bool {
-	if tool == nil {
-		return true
-	}
-
-	value := reflect.ValueOf(tool)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 var _ po.Tool = (*Tool)(nil)

@@ -77,38 +77,27 @@ func (s State) Clone() State {
 }
 
 func (s State) Validate() error {
+	_, err := s.restoreHistory()
+	return err
+}
+
+func (s State) restoreHistory() (*History, error) {
 	if s.ID == "" {
-		return fmt.Errorf("%w: id is required", ErrInvalidSession)
+		return nil, fmt.Errorf("%w: id is required", ErrInvalidSession)
 	}
 	if s.CreatedAt.IsZero() {
-		return fmt.Errorf("%w: created time is required", ErrInvalidSession)
+		return nil, fmt.Errorf("%w: created time is required", ErrInvalidSession)
 	}
 	if s.Pending != nil {
 		if err := s.Pending.Validate(); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	if len(s.Entries) > 0 {
-		history, err := RestoreHistory(s.Entries, s.LeafID)
-		if err != nil {
-			return err
-		}
-		if _, err := history.Messages(); err != nil {
-			return err
-		}
-		return nil
+		return RestoreHistory(s.Entries, s.LeafID)
 	}
-
-	for index, message := range s.Messages {
-		if message == nil {
-			return fmt.Errorf("%w: message %d is nil", ErrInvalidSession, index)
-		}
-		if err := message.Validate(); err != nil {
-			return fmt.Errorf("%w: message %d: %v", ErrInvalidSession, index, err)
-		}
-	}
-	return nil
+	return LinearHistory(s.Messages, s.CreatedAt)
 }
 
 // Transcript 表示 Session 中已经提交的逻辑事实消息。
@@ -171,11 +160,7 @@ func New(id string, createdAt time.Time, journal Journal) (*Session, error) {
 
 func NewWithOptions(id string, createdAt time.Time, journal Journal, options Options) (*Session, error) {
 	state := State{ID: id, CreatedAt: createdAt}
-	if err := state.Validate(); err != nil {
-		return nil, err
-	}
-
-	transcript, err := NewTranscript()
+	history, err := state.restoreHistory()
 	if err != nil {
 		return nil, err
 	}
@@ -183,8 +168,7 @@ func NewWithOptions(id string, createdAt time.Time, journal Journal, options Opt
 	return &Session{
 		id:             id,
 		createdAt:      createdAt,
-		history:        NewHistory(),
-		transcript:     transcript,
+		history:        history,
 		journal:        journal,
 		contextBuilder: options.ContextBuilder,
 	}, nil
@@ -196,30 +180,12 @@ func Resume(state State, journal Journal) (*Session, error) {
 }
 
 func ResumeWithOptions(state State, journal Journal, options Options) (*Session, error) {
-	if err := state.Validate(); err != nil {
-		return nil, err
-	}
-
-	var (
-		history *History
-		err     error
-	)
-	if len(state.Entries) > 0 {
-		history, err = RestoreHistory(state.Entries, state.LeafID)
-	} else {
-		history, err = LinearHistory(state.Messages, state.CreatedAt)
-	}
-
+	history, err := state.restoreHistory()
 	if err != nil {
 		return nil, err
 	}
 
 	messages, err := history.Messages()
-	if err != nil {
-		return nil, err
-	}
-
-	transcript, err := NewTranscript(messages...)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +200,7 @@ func ResumeWithOptions(state State, journal Journal, options Options) (*Session,
 		id:             state.ID,
 		createdAt:      state.CreatedAt,
 		history:        history,
-		transcript:     transcript,
+		transcript:     Transcript{messages: messages},
 		journal:        journal,
 		contextBuilder: options.ContextBuilder,
 		pending:        pending,
@@ -268,9 +234,7 @@ func (s *Session) State() State {
 func (s *Session) Transcript() Transcript {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	transcript, _ := NewTranscript(s.transcript.Messages()...)
-	return transcript
+	return Transcript{messages: s.transcript.Messages()}
 }
 
 // BranchTo 把活动叶节点切换到一条历史消息，后续 Prompt 将从那里创建新分支。
@@ -283,13 +247,7 @@ func (s *Session) BranchTo(ctx context.Context, messageID string) error {
 		return ErrSessionBusy
 	}
 
-	entry, ok := func() (Entry, bool) {
-		if s.history == nil {
-			return Entry{}, false
-		}
-		e, ok := s.history.byID[messageID]
-		return e, ok
-	}()
+	entry, ok := s.history.byID[messageID]
 	if !ok {
 		return fmt.Errorf("%w: branch target %q not found", ErrInvalidSession, messageID)
 	}
@@ -365,26 +323,14 @@ func newRun(handle *po.RunHandle) *Run {
 }
 
 func (r *Run) RunID() string {
-	if r == nil || r.handle == nil {
-		return ""
-	}
 	return r.handle.RunID()
 }
 
 func (r *Run) Done() <-chan struct{} {
-	if r == nil {
-		closed := make(chan struct{})
-		close(closed)
-		return closed
-	}
 	return r.done
 }
 
 func (r *Run) Wait() (po.RunResult, error) {
-	if r == nil {
-		return po.RunResult{}, fmt.Errorf("session run is nil")
-	}
-
 	<-r.done
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -392,23 +338,14 @@ func (r *Run) Wait() (po.RunResult, error) {
 }
 
 func (r *Run) Steer(message po.UserMessage) error {
-	if r == nil || r.handle == nil {
-		return po.ErrRunClosed
-	}
 	return r.handle.Steer(message)
 }
 
 func (r *Run) FollowUp(message po.UserMessage) error {
-	if r == nil || r.handle == nil {
-		return po.ErrRunClosed
-	}
 	return r.handle.FollowUp(message)
 }
 
 func (r *Run) Abort() {
-	if r == nil || r.handle == nil {
-		return
-	}
 	r.handle.Abort()
 }
 
@@ -569,12 +506,6 @@ func (s *Session) beginPrompt(user po.UserMessage) ([]po.Message, Entry, error) 
 	}
 	s.running = true
 	return s.transcript.Messages(), entry, nil
-}
-
-func (s *Session) prepareEntry(message po.Message) (Entry, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.history.PrepareAppend(message, time.Now().UTC())
 }
 
 // prepareEntries 在不修改真实 History 的前提下，为一批连续消息确定稳定 parent chain。

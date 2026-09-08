@@ -42,7 +42,7 @@ func TestRetryableProviderErrorRetries(t *testing.T) {
 		scripted.Must(scripted.Reply("a1", "ok", po.Usage{})),
 	)
 	sleeper := &recordingSleeper{}
-	model, err := retry.New(base, retry.Policy{MaxAttempts: 3, BaseDelay: time.Second, MaxDelay: 4 * time.Second}, sleeper)
+	model, err := retry.New(base, retry.Policy{MaxAttempts: 3, BaseDelay: time.Second, MaxDelay: 4 * time.Second}, sleeper.Sleep)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestNonRetryableErrorStopsImmediately(t *testing.T) {
 		Op: "test", StatusCode: 401, Retryable: false, Err: errors.New("bad key"),
 	}))
 	sleeper := &recordingSleeper{}
-	model, err := retry.New(base, retry.Policy{MaxAttempts: 3, BaseDelay: time.Second}, sleeper)
+	model, err := retry.New(base, retry.Policy{MaxAttempts: 3, BaseDelay: time.Second}, sleeper.Sleep)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func (m *partialFailureModel) Generate(ctx context.Context, req po.ModelRequest,
 
 func TestDoesNotRetryAfterPartialStreaming(t *testing.T) {
 	base := &partialFailureModel{}
-	model, err := retry.New(base, retry.Policy{MaxAttempts: 3, BaseDelay: time.Millisecond}, &recordingSleeper{})
+	model, err := retry.New(base, retry.Policy{MaxAttempts: 3, BaseDelay: time.Millisecond}, (&recordingSleeper{}).Sleep)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,23 +125,6 @@ func TestDoesNotRetryAfterPartialStreaming(t *testing.T) {
 	}
 }
 
-type nilSleeper struct{}
-
-func (*nilSleeper) Sleep(context.Context, time.Duration) error { return nil }
-
-func TestTypedNilSleeperUsesDefaultInsteadOfPanicking(t *testing.T) {
-	base := scripted.MustNew(scripted.DefaultInfo(), scripted.Must(scripted.Reply("a1", "ok", po.Usage{})))
-	var sleeper *nilSleeper
-	model, err := retry.New(base, retry.Policy{MaxAttempts: 1}, sleeper)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := model.Generate(context.Background(), userRequest(t), nil); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestStopsAtMaxAttempts(t *testing.T) {
 	base := scripted.MustNew(
 		scripted.DefaultInfo(),
@@ -150,7 +133,7 @@ func TestStopsAtMaxAttempts(t *testing.T) {
 		scripted.Fail(&provider.Error{Op: "test", StatusCode: 503, Retryable: true, Err: errors.New("temporary-3")}),
 	)
 	sleeper := &recordingSleeper{}
-	model, err := retry.New(base, retry.Policy{MaxAttempts: 3, BaseDelay: time.Second, JitterFraction: 0}, sleeper)
+	model, err := retry.New(base, retry.Policy{MaxAttempts: 3, BaseDelay: time.Second, JitterFraction: 0}, sleeper.Sleep)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,16 +147,5 @@ func TestStopsAtMaxAttempts(t *testing.T) {
 	}
 	if len(sleeper.delays) != 2 {
 		t.Fatalf("sleep calls = %d, want 2", len(sleeper.delays))
-	}
-}
-
-func TestTimerSleeperStopsOnContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancelCause(context.Background())
-	want := errors.New("stop retry")
-	cancel(want)
-
-	err := (retry.TimerSleeper{}).Sleep(ctx, time.Hour)
-	if !errors.Is(err, want) {
-		t.Fatalf("Sleep() error = %v, want %v", err, want)
 	}
 }

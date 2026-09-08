@@ -26,7 +26,7 @@ func NewToolSpec(name, description string, inputSchema json.RawMessage) (ToolSpe
 	if err := spec.Validate(); err != nil {
 		return ToolSpec{}, err
 	}
-	return spec.Clone(), nil
+	return spec, nil
 }
 
 // Name 返回模型调用工具时使用的稳定标识。
@@ -48,13 +48,6 @@ func (s ToolSpec) Description() string {
 // InputSchema 返回 Schema 的副本，避免 Provider 适配器意外改写 Registry 中的定义。
 func (s ToolSpec) InputSchema() json.RawMessage {
 	return bytes.Clone(s.inputSchema)
-}
-
-// Clone 返回 ToolSpec 的深拷贝。
-func (s ToolSpec) Clone() ToolSpec {
-	clone := s
-	clone.inputSchema = bytes.Clone(s.inputSchema)
-	return clone
 }
 
 // Validate 只校验 ToolSpec 的协议形状。
@@ -117,7 +110,7 @@ func NewModelRequest(systemPrompt string, messages []Message, tools []ToolSpec, 
 	if err := request.Validate(); err != nil {
 		return ModelRequest{}, err
 	}
-	return request.Clone(), nil
+	return request, nil
 }
 
 // SystemPrompt 返回本次请求使用的系统提示词。
@@ -148,16 +141,6 @@ func (r ModelRequest) Tools() []ToolSpec {
 // 返回 0 表示交给 Model 或 Provider 使用默认值。
 func (r ModelRequest) MaxOutputTokens() int {
 	return r.maxOutputTokens
-}
-
-// Clone 创建一个可安全保存到测试记录或重试队列中的请求副本。
-func (r ModelRequest) Clone() ModelRequest {
-	return ModelRequest{
-		systemPrompt:    r.systemPrompt,
-		messages:        append([]Message(nil), r.messages...),
-		tools:           cloneToolSpecs(r.tools),
-		maxOutputTokens: r.maxOutputTokens,
-	}
 }
 
 // Validate 检查自身请求是否合法，但不依赖某个具体模型的能力
@@ -195,13 +178,6 @@ func (r ModelRequest) Validate() error {
 //
 // 这一步不放进 Provider 里，是为了让错误在发出网络请求前就被发现。
 func (r ModelRequest) ValidateFor(info ModelInfo) error {
-	if err := r.Validate(); err != nil {
-		return err
-	}
-	if err := info.Validate(); err != nil {
-		return err
-	}
-
 	if len(r.tools) > 0 && !info.Capabilities.Tools {
 		return fmt.Errorf("%w: model %s does not support tools", ErrInvalidModelRequest, info.QualifiedID())
 	}
@@ -214,11 +190,7 @@ func (r ModelRequest) ValidateFor(info ModelInfo) error {
 }
 
 func cloneToolSpecs(specs []ToolSpec) []ToolSpec {
-	cloned := make([]ToolSpec, len(specs))
-	for i, spec := range specs {
-		cloned[i] = spec.Clone()
-	}
-	return cloned
+	return append([]ToolSpec(nil), specs...)
 }
 
 // ModelStopReason 描述“本次模型生成为什么停止”。

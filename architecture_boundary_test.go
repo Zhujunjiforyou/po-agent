@@ -28,7 +28,6 @@ func TestCoreDoesNotImportOptionalExtensions(t *testing.T) {
 		modulePath + "/tool/builtin",
 		modulePath + "/tool/timeout",
 		modulePath + "/tool/output",
-		modulePath + "/tool/concurrency",
 		modulePath + "/session",
 	}
 

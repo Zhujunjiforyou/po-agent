@@ -2,7 +2,7 @@ package po
 
 import "testing"
 
-func TestNewAtomicIDGeneratorSeparatesInstances(t *testing.T) {
+func TestIDGeneratorSeparatesInstances(t *testing.T) {
 	first := NewAtomicIDGenerator()
 	second := NewAtomicIDGenerator()
 

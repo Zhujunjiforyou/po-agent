@@ -145,7 +145,6 @@ func (b *Builder) Build(ctx context.Context, input po.ContextBuildInput) (po.Con
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	input = input.Clone()
 	messageBudget, err := b.messageBudget(input)
 	if err != nil {
 		return po.ContextBuildResult{}, err
