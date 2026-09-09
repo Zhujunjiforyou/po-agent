@@ -145,6 +145,9 @@ func (m *replModelManager) Switch(choice modelChoice) error {
 	if err != nil {
 		return err
 	}
+	if _, err := m.runtime.sessionOptionsFor(model, config); err != nil {
+		return err
+	}
 	if err := m.persistSelection(appconfig.Selection{Provider: choice.Provider, Model: choice.Model}); err != nil {
 		return err
 	}

@@ -110,3 +110,44 @@ func TestREPLModelSwitchDoesNotPartiallyApplyWhenPersistenceFails(t *testing.T) 
 		t.Fatal("failed switch partially changed the active model")
 	}
 }
+
+func TestREPLModelSwitchDoesNotPartiallyApplyWhenContextSetupFails(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	initial := appconfig.DefaultRuntime("first", appconfig.Provider{BaseURL: "http://first.example/v1"}, "model-a")
+	runtime, err := buildAppRuntime(initial, "key-a", runtimeOptions{
+		Workspace: t.TempDir(),
+		Approver:  staticApprover(false),
+		Output:    newPlainModelOutput(&stdout, &stderr),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	file := appconfig.New("first", initial.BaseURL, initial.Model)
+	file.Providers["second"] = appconfig.Provider{BaseURL: "http://second.example/v1"}
+	if err := appconfig.Write(configPath, file, false); err != nil {
+		t.Fatal(err)
+	}
+
+	originalAgent, originalModel := runtime.Agent, runtime.model
+	next := appconfig.DefaultRuntime("second", file.Providers["second"], "model-b")
+	next.ContextWindow, next.ModelMaxOutputTokens, next.MaxOutputTokens = 64, 32, 32
+	t.Setenv(appconfig.DefaultAPIKeyEnv, "key-b")
+	manager := newREPLModelManager(configPath, initial, runtime, nil)
+	if err := manager.Switch(modelChoice{Provider: "second", Model: "model-b", config: next}); err == nil {
+		t.Fatal("Switch() unexpectedly succeeded")
+	}
+	if runtime.Agent != originalAgent || runtime.model != originalModel || manager.Current().Model != "model-a" {
+		t.Fatal("failed switch partially changed the active model")
+	}
+
+	updated, err := appconfig.LoadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Current != (appconfig.Selection{Provider: "first", Model: "model-a"}) {
+		t.Fatalf("failed switch persisted model = %#v", updated.Current)
+	}
+}
