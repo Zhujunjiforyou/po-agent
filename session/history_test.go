@@ -56,10 +56,7 @@ func TestHistoryBranchPreservesAbandonedPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	messages, err := h.Messages()
-	if err != nil {
-		t.Fatal(err)
-	}
+	messages := h.Messages()
 	got := make([]string, 0, len(messages))
 	for _, message := range messages {
 		got = append(got, message.MessageID())

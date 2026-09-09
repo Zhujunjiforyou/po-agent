@@ -481,8 +481,7 @@ func TestLongSessionRecoversCrashTailAndUnclosedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Persist the same durable boundary a process would leave after recording the
-	// user input and run_start, but before a trustworthy run_end.
+	// 模拟进程记录用户输入和 run_start 后、尚未写入可信 run_end 时留下的持久化边界。
 	crashJournal, state, err := jsonl.Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -511,7 +510,7 @@ func TestLongSessionRecoversCrashTailAndUnclosedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate termination in the middle of the next physical JSONL write.
+	// 模拟下一次 JSONL 物理写入进行到一半时进程退出。
 	raw, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatal(err)

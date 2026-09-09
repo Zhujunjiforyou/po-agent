@@ -213,10 +213,6 @@ func (c *runControl) close() {
 }
 
 func takeQueuedMessages(queue *[]UserMessage, mode ControlQueueMode) []UserMessage {
-	if len(*queue) == 0 {
-		return nil
-	}
-
 	if mode == ControlQueueAll {
 		messages := append([]UserMessage(nil), (*queue)...)
 		*queue = nil

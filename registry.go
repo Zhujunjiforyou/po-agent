@@ -1,13 +1,8 @@
 package po
 
-import (
-	"fmt"
-)
+import "fmt"
 
-// ToolRegistry 是配置阶段可修改的工具集合
-// 同时保存
-// map：按模型返回的name快速查找tool
-// order：保持注册顺序稳定，生成稳定toolsepc列表
+// ToolRegistry 保存工具名称索引和注册顺序。工具应在启动 Run 前完成注册。
 type ToolRegistry struct {
 	tools map[string]Tool
 	order []string
@@ -51,7 +46,6 @@ func (r *ToolRegistry) Specs() []ToolSpec {
 	specs := make([]ToolSpec, 0, len(r.order))
 
 	for _, name := range r.order {
-		// Tool.Spec 本身返回 Clone，所以这里得到的是调用方可安全持有的快照。
 		specs = append(specs, r.tools[name].Spec())
 	}
 

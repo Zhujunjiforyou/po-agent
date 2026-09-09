@@ -10,7 +10,7 @@ type SchemaValidator interface {
 	Validate(schema json.RawMessage, instance json.RawMessage) error
 }
 
-// ValidateToolCallArguments 把ToolSpec、ToolCall 和 SchemaValidator连在一起
+// ValidateToolCallArguments 用已注册 ToolSpec 的 Schema 校验 ToolCall 参数。
 func ValidateToolCallArguments(validator SchemaValidator, spec ToolSpec, call ToolCall) error {
 	if validator == nil {
 		return fmt.Errorf("%w: validator is required", ErrToolArgumentValidation)

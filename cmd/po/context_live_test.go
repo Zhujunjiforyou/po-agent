@@ -15,7 +15,7 @@ import (
 	"github.com/lemonzjj/po-agent-go/session"
 )
 
-// This test spends real model tokens and is opt-in.
+// 该测试会消耗真实模型 Token，因此只在显式启用时运行。
 func TestLiveRepeatedContextCompressionQuality(t *testing.T) {
 	if os.Getenv("PO_LIVE_CONTEXT_TEST") != "1" {
 		t.Skip("set PO_LIVE_CONTEXT_TEST=1 to run against a real model")

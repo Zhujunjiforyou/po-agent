@@ -60,15 +60,8 @@ func (p *Pipeline) AfterToolCall(ctx context.Context, input po.AfterToolCallCont
 		if !ok {
 			continue
 		}
-		next, nextIsError, err := after.AfterToolCall(ctx, po.AfterToolCallContext{
-			Run:        input.Run,
-			BatchIndex: input.BatchIndex,
-			BatchSize:  input.BatchSize,
-			Call:       input.Call,
-			Spec:       input.Spec,
-			Result:     result,
-			IsError:    isError,
-		})
+		input.Result, input.IsError = result, isError
+		next, nextIsError, err := after.AfterToolCall(ctx, input)
 		if err != nil {
 			return po.ToolResult{}, false, fmt.Errorf("policy %s after tool call: %w", current.Name(), err)
 		}

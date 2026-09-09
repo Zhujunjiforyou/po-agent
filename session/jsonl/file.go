@@ -600,10 +600,7 @@ func parseFile(data []byte) (parsedFile, error) {
 	if err != nil {
 		return parsedFile{}, fmt.Errorf("%w: rebuild tree: %v", ErrInvalidFile, err)
 	}
-	messages, err := history.Messages()
-	if err != nil {
-		return parsedFile{}, fmt.Errorf("%w: rebuild active branch: %v", ErrInvalidFile, err)
-	}
+	messages := history.Messages()
 
 	return parsedFile{
 		header: header, version: version, entries: entries, messages: messages, leafID: leafID, pending: pending,

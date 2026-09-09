@@ -81,7 +81,7 @@ func (c *Controller) Name() string { return "run-guard" }
 
 // Context 在 Agent 核心外应用可选的运行时长限制。
 func (c *Controller) Context(parent context.Context) (context.Context, context.CancelFunc) {
-	if c == nil || c.budget.MaxDuration <= 0 {
+	if c.budget.MaxDuration <= 0 {
 		return context.WithCancel(parent)
 	}
 	return context.WithTimeoutCause(parent, c.budget.MaxDuration, po.ErrRunTimeout)
@@ -90,9 +90,6 @@ func (c *Controller) Context(parent context.Context) (context.Context, context.C
 // BeforeToolCall 保护副作用边界。在首次实际调用 Tool.Execute 前检查用量限制和过大的
 // 工具批次。
 func (c *Controller) BeforeToolCall(ctx context.Context, input po.BeforeToolCallContext) (po.BeforeToolCallDecision, error) {
-	if c == nil {
-		return po.BeforeToolCallDecision{}, nil
-	}
 	if cause := context.Cause(ctx); cause != nil {
 		return po.BeforeToolCallDecision{}, cause
 	}
@@ -108,9 +105,6 @@ func (c *Controller) BeforeToolCall(ctx context.Context, input po.BeforeToolCall
 
 // ShouldStopAfterTurn 只会在核心原本准备开始下一轮模型调用时执行。
 func (c *Controller) ShouldStopAfterTurn(ctx context.Context, input po.TurnCompletedContext) (po.RunStopReason, bool, error) {
-	if c == nil {
-		return "", false, nil
-	}
 	if cause := context.Cause(ctx); cause != nil {
 		return "", false, cause
 	}
@@ -200,27 +194,13 @@ func consecutiveRepeatedToolTurns(messages []po.Message, limit int) (int, error)
 }
 
 func asAssistant(message po.Message) (po.AssistantMessage, bool) {
-	switch value := message.(type) {
-	case po.AssistantMessage:
-		return value, true
-	case *po.AssistantMessage:
-		if value != nil {
-			return *value, true
-		}
-	}
-	return po.AssistantMessage{}, false
+	value, ok := message.(po.AssistantMessage)
+	return value, ok
 }
 
 func asToolResult(message po.Message) (po.ToolResultMessage, bool) {
-	switch value := message.(type) {
-	case po.ToolResultMessage:
-		return value, true
-	case *po.ToolResultMessage:
-		if value != nil {
-			return *value, true
-		}
-	}
-	return po.ToolResultMessage{}, false
+	value, ok := message.(po.ToolResultMessage)
+	return value, ok
 }
 
 func reverseToolResults(results []po.ToolResultMessage) {

@@ -287,8 +287,8 @@ func (b *Builder) applyCheckpoint(messages []po.Message) ([]po.Message, string) 
 	if b.checkpoint == nil {
 		return messages, ""
 	}
-	// The checkpoint normally sits close to the current tail. Search backwards so
-	// steady-state work is proportional to retained context, not the full Session.
+	// Checkpoint 通常靠近当前尾部；倒序查找可让稳态开销取决于保留的上下文，
+	// 而不是完整 Session 的长度。
 	for index := len(messages) - 1; index >= 0; index-- {
 		message := messages[index]
 		if message.MessageID() == b.checkpoint.FirstKeptMessageID {
@@ -337,9 +337,8 @@ func (b *Builder) chooseCut(messages []po.Message) int {
 	return 0
 }
 
-// chooseSummaryChunk caps one hidden summarization request. targetCut is the
-// complete old prefix that eventually needs compacting; the returned cut may be
-// smaller when a restored transcript spans multiple model windows.
+// chooseSummaryChunk 限制单次隐藏摘要请求的大小。targetCut 是最终需要压缩的旧前缀；
+// 恢复出的 Transcript 横跨多个模型窗口时，返回的切分位置可以小于 targetCut。
 func (b *Builder) chooseSummaryChunk(messages []po.Message, targetCut int, previousSummary string, budget int) int {
 	used := b.countSummary(previousSummary)
 	maxCut := 0
@@ -355,8 +354,8 @@ func (b *Builder) chooseSummaryChunk(messages []po.Message, targetCut int, previ
 		return maxCut
 	}
 
-	// Prefer leaving the next chunk at a user boundary. If a single turn is too
-	// large, an assistant boundary is still valid; an orphan tool result is not.
+	// 优先让下一段从 User 边界开始。单个 Turn 过大时也可以从 Assistant 开始，
+	// 但不能留下失去对应 ToolCall 的 ToolResult。
 	for cut := maxCut; cut > 0; cut-- {
 		if messages[cut].Kind() == po.MessageUser {
 			return cut

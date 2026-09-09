@@ -150,7 +150,7 @@ func (r ModelRequest) Validate() error {
 	}
 
 	for index, message := range r.messages {
-		if message == nil || isNilMessage(message) {
+		if message == nil {
 			return fmt.Errorf("%w: message %d is nil", ErrInvalidModelRequest, index)
 		}
 		if err := message.Validate(); err != nil {

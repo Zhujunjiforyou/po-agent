@@ -44,10 +44,9 @@ const (
 type RunResult struct {
 	runID    string
 	messages []Message
-	// transcriptPrefix is populated by Session when messages contains a bounded
-	// context projection. It lets Messages reconstruct the complete logical
-	// transcript lazily, so callers keep the historical API without forcing an
-	// O(history) copy after every turn.
+	// Session 在 messages 只含有界上下文投影时设置 transcriptPrefix。
+	// Messages 可据此延迟重建完整逻辑 Transcript，既保持原有 API，
+	// 也避免每一轮都执行一次 O(history) 复制。
 	transcriptPrefix []Message
 	finalText        string
 	stopReason       RunStopReason
@@ -67,8 +66,7 @@ func resultFromState(state *runState, finalText string, reason RunStopReason) Ru
 	turns := append([]TurnRecord(nil), state.turns...)
 	return RunResult{
 		runID: state.runID,
-		// finish transfers ownership of the completed run state to the immutable
-		// result. No code mutates state.messages after resultFromState returns.
+		// Run 完成后把 state.messages 的所有权交给不可变结果；此后不会再修改它。
 		messages:     state.messages,
 		finalText:    finalText,
 		stopReason:   reason,
@@ -97,10 +95,8 @@ func (r RunResult) Messages() []Message {
 	return append([]Message(nil), r.messages...)
 }
 
-// WithTranscriptPrefix returns a result whose Messages method reconstructs the
-// complete logical transcript from an immutable prefix and this Run's newly
-// generated facts. Session adapters use it after running from a bounded context
-// projection. The prefix elements and order must not be modified afterwards.
+// WithTranscriptPrefix 让 Messages 使用不可变前缀和本次 Run 新产生的事实重建完整逻辑
+// Transcript。Session 从有界上下文投影启动 Run 后使用该方法；之后不能修改前缀元素及顺序。
 func (r RunResult) WithTranscriptPrefix(prefix []Message) RunResult {
 	r.transcriptPrefix = prefix
 	return r
@@ -123,8 +119,7 @@ func (r RunResult) TurnAttempts() int { return r.turnAttempts }
 // 扩展在副作用边界之前整批停止的调用不会计入这个值。
 func (r RunResult) ToolCalls() int { return r.toolCalls }
 
-// InitialMessageCount returns the number of messages that formed this Run's
-// projected input. Session uses it to separate new facts from temporary context.
+// InitialMessageCount 返回构成本次 Run 投影输入的消息数，Session 用它区分临时上下文与新事实。
 func (r RunResult) InitialMessageCount() int { return r.initialCount }
 
 // StartedAt / FinishedAt 返回运行时间边界。
@@ -189,7 +184,7 @@ func newRunState(runID string, startedAt time.Time, messages []Message) *runStat
 	return &runState{
 		runID:     runID,
 		startedAt: startedAt,
-		// StartMessagesWithOptions created this slice solely for the run goroutine.
+		// 该切片由 StartMessagesWithOptions 专门为 Run goroutine 创建。
 		messages:     messages,
 		initialCount: len(messages),
 	}

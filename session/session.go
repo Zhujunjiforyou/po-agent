@@ -64,18 +64,6 @@ type State struct {
 	Pending *PendingRun
 }
 
-// Clone 防止调用方修改 State 顶层 Slice。
-func (s State) Clone() State {
-	clone := s
-	clone.Messages = append([]po.Message(nil), s.Messages...)
-	clone.Entries = append([]Entry(nil), s.Entries...)
-	if s.Pending != nil {
-		pending := *s.Pending
-		clone.Pending = &pending
-	}
-	return clone
-}
-
 func (s State) Validate() error {
 	_, err := s.restoreHistory()
 	return err
@@ -128,9 +116,8 @@ func (t Transcript) Messages() []po.Message {
 }
 
 func (t *Transcript) replace(messages []po.Message) {
-	// A completed RunResult may retain the old immutable prefix for lazy logical
-	// transcript reconstruction. Allocate on branch replacement so it cannot be
-	// overwritten by a later BranchTo operation.
+	// 已完成的 RunResult 可能仍持有旧的不可变前缀，用于延迟重建逻辑 Transcript。
+	// 切换分支时重新分配，避免后续 BranchTo 覆盖这段前缀。
 	t.messages = append([]po.Message(nil), messages...)
 }
 
@@ -193,10 +180,7 @@ func ResumeWithOptions(state State, journal Journal, options Options) (*Session,
 		return nil, err
 	}
 
-	messages, err := history.Messages()
-	if err != nil {
-		return nil, err
-	}
+	messages := history.Messages()
 
 	var pending *PendingRun
 	if state.Pending != nil {
@@ -249,9 +233,8 @@ func (s *Session) Transcript() Transcript {
 	return Transcript{messages: s.transcript.Messages()}
 }
 
-// SetContextBuilder changes the per-Session context policy between Runs. The
-// next Run starts from the complete durable transcript so a new model/policy
-// never inherits an incompatible in-memory checkpoint.
+// SetContextBuilder 在两次 Run 之间更换 Session 的上下文策略。下一次 Run 从完整的
+// 持久化 Transcript 开始，避免新模型或新策略继承不兼容的内存 Checkpoint。
 func (s *Session) SetContextBuilder(builder po.ContextBuilder) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -292,10 +275,7 @@ func (s *Session) BranchTo(ctx context.Context, messageID string) error {
 	if err := s.history.SetLeaf(messageID); err != nil {
 		return err
 	}
-	messages, err := s.history.Messages()
-	if err != nil {
-		return err
-	}
+	messages := s.history.Messages()
 	s.transcript.replace(messages)
 	if s.contextBuilder != nil {
 		s.context = append([]po.Message(nil), messages...)
@@ -490,9 +470,8 @@ func (s *Session) commitRun(result po.RunResult, runErr error, attempt PendingRu
 	if err != nil {
 		return result, errors.Join(runErr, err)
 	}
-	// Preserve the public RunResult contract without eagerly rebuilding the full
-	// transcript on every turn. The Session is single-writer, so this fixed-length
-	// prefix remains immutable while the result lazily joins it with newMessages.
+	// 保持 RunResult 的公开约定，同时避免每轮都立即重建完整 Transcript。
+	// Session 只有一个写入者，因此这段定长前缀保持不变，结果可延迟拼接新消息。
 	result = result.WithTranscriptPrefix(s.transcriptView())
 
 	// 先把完整批次写入持久化 Journal，再推进内存中的活动分支。
@@ -550,9 +529,8 @@ func (s *Session) beginPrompt(user po.UserMessage) (Entry, error) {
 	return entry, nil
 }
 
-// startAgent holds a read lock until Agent has synchronously validated and copied
-// the transcript slice. A running Session cannot otherwise change its active
-// branch, so this avoids another full-history copy without exposing mutable state.
+// startAgent 持有读锁，直到 Agent 同步校验并复制 Transcript 切片。
+// Session 运行期间不能切换活动分支，因此可以少做一次完整历史复制而不暴露可变状态。
 func (s *Session) startAgent(ctx context.Context, agent *po.Agent) (*po.RunHandle, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -642,7 +620,7 @@ func (s *Session) commitRunEntries(entries []Entry, contextMessages []po.Message
 		s.transcript.append(entry.Message)
 	}
 	if s.contextBuilder != nil {
-		// result.Messages returned an owned slice, so the bounded context can take it.
+		// result.Messages 返回独占切片，可直接交给有界上下文持有。
 		s.context = contextMessages
 	}
 	return nil

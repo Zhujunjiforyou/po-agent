@@ -39,9 +39,8 @@ func (f ContextBuilderFunc) Build(ctx context.Context, input ContextBuildInput) 
 type RunOptions struct {
 	ContextBuilder ContextBuilder
 
-	// ProjectInitialContext lets a Session keep the complete durable transcript
-	// separately while the Run state owns only the ContextBuilder projection.
-	// Direct Agent callers leave this false and retain the historical behavior in
-	// which RunResult.Messages contains their complete input transcript.
+	// ProjectInitialContext 让 Session 单独保留完整的持久化 Transcript，而 Run State
+	// 只持有 ContextBuilder 生成的投影。直接使用 Agent 的调用方保持默认 false，
+	// 此时 RunResult.Messages 仍包含完整的输入 Transcript。
 	ProjectInitialContext bool
 }

@@ -250,13 +250,3 @@ func TestToolCallRejectsTrailingJSON(t *testing.T) {
 		t.Fatalf("error = %v, want ErrInvalidToolCall", err)
 	}
 }
-
-// TestMarshalMessageRejectsTypedNil 验证 Codec 不会因接口 typed nil 而 panic。
-func TestMarshalMessageRejectsTypedNil(t *testing.T) {
-	var user *UserMessage
-
-	_, err := MarshalMessage(user)
-	if !errors.Is(err, ErrInvalidMessage) {
-		t.Fatalf("error = %v, want ErrInvalidMessage", err)
-	}
-}

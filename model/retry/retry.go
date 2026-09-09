@@ -45,9 +45,6 @@ func (p Policy) Delay(retryNumber int, retryAfter time.Duration) time.Duration {
 	if retryAfter > 0 {
 		return retryAfter
 	}
-	if retryNumber < 1 {
-		retryNumber = 1
-	}
 
 	delay := p.BaseDelay
 	for i := 1; i < retryNumber; i++ {
@@ -78,10 +75,7 @@ func sleep(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	case <-ctx.Done():
-		if cause := context.Cause(ctx); cause != nil {
-			return cause
-		}
-		return ctx.Err()
+		return context.Cause(ctx)
 	}
 }
 
@@ -118,8 +112,7 @@ func MustNew(base po.Model, policy Policy, sleepFn func(context.Context, time.Du
 func (m *Model) Info() po.ModelInfo { return m.base.Info() }
 
 func (m *Model) Generate(ctx context.Context, request po.ModelRequest, emit po.DeltaEmitter) (po.ModelResponse, error) {
-	var lastErr error
-	for attempt := 1; attempt <= m.policy.MaxAttempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		streamed := false
 		attemptEmit := po.DeltaEmitter(func(ctx context.Context, delta po.ModelDelta) error {
 			streamed = true
@@ -133,8 +126,6 @@ func (m *Model) Generate(ctx context.Context, request po.ModelRequest, emit po.D
 		if err == nil {
 			return response, nil
 		}
-		lastErr = err
-
 		if cause := context.Cause(ctx); cause != nil {
 			return po.ModelResponse{}, cause
 		}
@@ -150,12 +141,11 @@ func (m *Model) Generate(ctx context.Context, request po.ModelRequest, emit po.D
 			return po.ModelResponse{}, err
 		}
 	}
-	return po.ModelResponse{}, lastErr
 }
 
 func metadata(err error) (bool, time.Duration) {
 	var providerErr *provider.Error
-	if errors.As(err, &providerErr) && providerErr != nil {
+	if errors.As(err, &providerErr) {
 		return providerErr.Retryable, providerErr.RetryAfter
 	}
 	return false, 0

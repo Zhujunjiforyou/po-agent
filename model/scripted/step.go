@@ -192,16 +192,8 @@ func ExpectLastToolResult(toolCallID string) RequestCheck {
 		}
 
 		last := messages[len(messages)-1]
-		var result po.ToolResultMessage
-		switch typed := last.(type) {
-		case po.ToolResultMessage:
-			result = typed
-		case *po.ToolResultMessage:
-			if typed == nil {
-				return fmt.Errorf("last message is a nil *ToolResultMessage")
-			}
-			result = *typed
-		default:
+		result, ok := last.(po.ToolResultMessage)
+		if !ok {
 			return fmt.Errorf("last message kind = %s, want tool_result", last.Kind())
 		}
 

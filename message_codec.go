@@ -31,7 +31,7 @@ type wireMessage struct {
 
 // MarshalMessage 把Domain Message转换为版本化JSON
 func MarshalMessage(message Message) ([]byte, error) {
-	if message == nil || isNilMessage(message) {
+	if message == nil {
 		return nil, fmt.Errorf("%w: message is nil", ErrInvalidMessage)
 	}
 	if err := message.Validate(); err != nil {
@@ -47,12 +47,8 @@ func MarshalMessage(message Message) ([]byte, error) {
 	switch typed := message.(type) {
 	case UserMessage:
 		wire.Parts = typed.Parts()
-	case *UserMessage:
-		wire.Parts = typed.Parts()
 
 	case AssistantMessage:
-		wire.Parts = typed.Parts()
-	case *AssistantMessage:
 		wire.Parts = typed.Parts()
 
 	case ToolResultMessage:
@@ -60,15 +56,8 @@ func MarshalMessage(message Message) ([]byte, error) {
 		wire.ToolCallID = typed.ToolCallID()
 		wire.ToolName = typed.ToolName()
 		wire.IsError = typed.IsError()
-	case *ToolResultMessage:
-		wire.Parts = typed.Parts()
-		wire.ToolCallID = typed.ToolCallID()
-		wire.ToolName = typed.ToolName()
-		wire.IsError = typed.IsError()
 
 	default:
-		// 理论上 sealed interface 已经限制了实现集合；保留 default 是为了防御
-		// 同 package 内未来新增类型却忘记更新 Codec 的情况。
 		return nil, fmt.Errorf("%w: unsupported concrete type %T", ErrInvalidMessage, message)
 	}
 	data, err := json.Marshal(wire)
@@ -76,27 +65,6 @@ func MarshalMessage(message Message) ([]byte, error) {
 		return nil, fmt.Errorf("marshal message: %w", err)
 	}
 	return data, nil
-}
-
-// isNilMessage 识别“接口中装着 nil 指针”的情况。
-// 例如：
-//
-//	var user *UserMessage = nil
-//	var message Message = user
-//
-// 此时 message != nil，因为接口仍然保存了动态类型 *UserMessage。
-// 如果不单独检查，后面调用 typed.Parts() 可能 panic。
-func isNilMessage(message Message) bool {
-	switch typed := message.(type) {
-	case *UserMessage:
-		return typed == nil
-	case *AssistantMessage:
-		return typed == nil
-	case *ToolResultMessage:
-		return typed == nil
-	default:
-		return false
-	}
 }
 
 // UnmarshalMessage 把版本化 JSON 恢复为经过校验的 Domain Message。

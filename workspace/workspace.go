@@ -25,9 +25,6 @@ func Open(rootPath string) (*Workspace, error) {
 
 // Close 释放 Workspace 持有的 OS 资源。
 func (w *Workspace) Close() error {
-	if w == nil || w.root == nil {
-		return nil
-	}
 	return w.root.Close()
 }
 

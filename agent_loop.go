@@ -72,7 +72,7 @@ func validateRunMessages(messages []Message) error {
 	}
 
 	for index, message := range messages {
-		if message == nil || isNilMessage(message) {
+		if message == nil {
 			return fmt.Errorf("run transcript message %d is nil", index)
 		}
 		if err := message.Validate(); err != nil {
@@ -140,8 +140,7 @@ func (a *Agent) runControlled(runCtx context.Context, runID string, initialMessa
 			}
 			modelMessages = view.Messages
 			if projectInitialContext {
-				// The durable Session owns the complete transcript. This Run only needs
-				// the bounded projection plus facts generated after it.
+				// 完整 Transcript 由持久化 Session 持有；Run 只保留有界投影和之后产生的新事实。
 				state.messages = append([]Message(nil), modelMessages...)
 				state.initialCount = len(state.messages)
 				modelMessages = state.messages

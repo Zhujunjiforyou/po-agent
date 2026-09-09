@@ -144,25 +144,16 @@ func (h *History) SetLeaf(id string) error {
 	return nil
 }
 
-// Path 返回从根节点到叶节点的稳定活动分支。
-func (h *History) Path() ([]Entry, error) {
+// Path 返回从根节点到叶节点的活动分支。
+func (h *History) Path() []Entry {
 	if h.leafID == "" {
-		return nil, nil
+		return nil
 	}
 
 	path := make([]Entry, 0)
-	seen := make(map[string]struct{})
 	currentID := h.leafID
 	for currentID != "" {
-		if _, duplicate := seen[currentID]; duplicate {
-			return nil, fmt.Errorf("%w: cycle detected at entry %q", ErrInvalidSession, currentID)
-		}
-		seen[currentID] = struct{}{}
-
-		entry, ok := h.byID[currentID]
-		if !ok {
-			return nil, fmt.Errorf("%w: missing entry %q while rebuilding branch", ErrInvalidSession, currentID)
-		}
+		entry := h.byID[currentID]
 		path = append(path, entry)
 		currentID = entry.ParentID
 	}
@@ -170,18 +161,15 @@ func (h *History) Path() ([]Entry, error) {
 	for left, right := 0, len(path)-1; left < right; left, right = left+1, right-1 {
 		path[left], path[right] = path[right], path[left]
 	}
-	return path, nil
+	return path
 }
 
 // Messages 返回当前活动分支上的消息。
-func (h *History) Messages() ([]po.Message, error) {
-	path, err := h.Path()
-	if err != nil {
-		return nil, err
-	}
+func (h *History) Messages() []po.Message {
+	path := h.Path()
 	messages := make([]po.Message, 0, len(path))
 	for _, entry := range path {
 		messages = append(messages, entry.Message)
 	}
-	return messages, nil
+	return messages
 }
